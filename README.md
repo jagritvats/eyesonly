@@ -95,6 +95,8 @@ just works: the pre-commit hook installed by `eyesonly setup` re-seals it for it
 | `eyesonly status` | Protected files, who can read them, and whether they need a rekey |
 | `eyesonly pull-policy && eyesonly rekey` | After the admin changes access: re-encrypt for the new audience |
 | `eyesonly audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
+| `eyesonly run -- <cmd>` | Run a command with your protected `.env` files as environment variables, decrypted from the committed blobs (`--file .env.production` to pick one; `eyesonly env` prints them) |
+| `EYESONLY_IDENTITY` | Your identity JSON (or base64 of it) from the environment instead of `~/.eyesonly`, for CI and containers. In GitHub Actions: `uses: jagritvats/eyesonly@v0.3` ([CI guide](docs/ci.md)) |
 | `eyesonly-server policy manifest app.git > m.json`, `eyesonly policy-sign m.json > s.json`, `eyesonly-server policy attest app.git s.json` | Admin signs the policy so a compromised server can't swap keys or add readers; clients pin the admin key on first contact (`EYESONLY_PIN_ADMIN=<fingerprint>` pins it up front) |
 
 ## Guides
@@ -264,6 +266,9 @@ src/negotiate.mjs                   upload-pack negotiation filter
 src/hooks.mjs                       client pre-commit hook
 src/policy.mjs                      glob / ref / group matching
 src/client.mjs                      filters + developer commands
+src/identity.mjs                    where the identity comes from (EYESONLY_IDENTITY or file)
+src/run.mjs                         eyesonly run / env (dotenv files into a process env)
+action.yml, action/setup.sh         GitHub Action: clone + decrypt in CI
 src/merge.mjs                       merge driver for protected files
 src/refguard.mjs                    protected refs, read-only members, rewind check
 src/attrs.mjs                       info/attributes pinning, server filter-redirect check

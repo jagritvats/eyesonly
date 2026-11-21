@@ -157,6 +157,44 @@ ref to a tree whose protected files are invalid under the current policy. That i
 force-pushing `main` back to a commit from before a rekey, which fails with
 `encrypted to users outside the policy`.
 
+## Separate secrets per environment
+
+Give each environment its own file and its own audience. Developers get development values,
+only the deploy pipeline and a couple of people get production:
+
+```json
+{
+  "members": ["*"],
+  "admins":  ["alice"],
+  "groups":  { "core": ["alice", "bob", "carol"], "deploy": ["alice", "ci-prod"] },
+  "writers": ["@core"],
+  "files": {
+    ".env.development": ["*"],
+    ".env.staging":     ["@core", "ci-staging"],
+    ".env.production":  ["@deploy"]
+  }
+}
+```
+
+- `"*"` means every registered user, so contractors can run the app locally without seeing
+  staging or production values.
+- After changing the policy, someone in each file's audience runs
+  `eyesonly pull-policy && eyesonly rekey` and pushes. Only readers can rekey a file.
+- Everyone else sees ciphertext for the files outside their audience, and the server
+  rejects their changes to them.
+
+Load one environment into a command with `eyesonly run`. It decrypts from the committed
+version of the file, so nothing extra lands on disk:
+
+```bash
+eyesonly run --file .env.development -- npm run dev
+eyesonly run --file .env.production -- ./deploy.sh     # refuses unless you're in @deploy
+```
+
+With no `--file`, `eyesonly run` loads every `.env` and `.env.*` you can read (in sorted
+order, later files winning) and skips the rest with a note. An explicit `--file` you can't
+read is an error, and the command doesn't run. For CI users, see [ci.md](ci.md).
+
 ## Rotate a secret
 
 1. Get a new value from the provider (Stripe, AWS, ...).

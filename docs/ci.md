@@ -53,7 +53,7 @@ Read access to a protected file normally includes write access. Leaving `ci-bot`
 
 | Secret | Value |
 |---|---|
-| `EYESONLY_IDENTITY` | the full contents of `ci-identity/identity.json` |
+| `EYESONLY_IDENTITY` | the contents of `ci-identity/identity.json` (raw JSON, or `base64` of it) |
 | `EYESONLY_TOKEN` | the token from `user add` |
 
 Then delete `ci-identity/`. The JSON file holds the private key, unencrypted.
@@ -62,67 +62,109 @@ If the policy is signed, also store the admin's policy fingerprint as a non-secr
 `EYESONLY_PIN_ADMIN`. Every CI run clones fresh, so without a pin each run trusts whichever
 admin signature the server presents (trust on first use).
 
-## 4. Clone in the job (GitHub Actions)
+## 4. Clone in the job
+
+### GitHub Actions: the eyesonly action
 
 ```yaml
 name: build
 on: [push]
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest          # macos-latest and windows-latest work too
     env:
       EYESONLY_PIN_ADMIN: ${{ vars.EYESONLY_PIN_ADMIN }}   # omit if the policy isn't signed
+    steps:
+      - uses: jagritvats/eyesonly@v0.3
+        with:
+          url: https://git.example.com/app.git
+          user: ci-bot
+          token: ${{ secrets.EYESONLY_TOKEN }}
+          identity: ${{ secrets.EYESONLY_IDENTITY }}
+          path: app
+      - run: npm ci && npm test
+        working-directory: app
+      - run: eyesonly run -- ./scripts/smoke-test.sh     # .env values as environment variables
+        working-directory: app
+```
+
+What the action does:
+
+- installs Node 22 if the runner has an older one, then `npm i -g eyesonly` (input `version`
+  pins it);
+- writes the identity to a 0600 file under `$RUNNER_TEMP` and sets `EYESONLY_HOME` for the
+  rest of the job;
+- gives git the token through a credential helper set with `GIT_CONFIG_*` variables for this
+  job only. The token never appears in the URL, `.git/config` or `~/.gitconfig`, and is
+  masked in logs;
+- runs `eyesonly clone`, then fails the step if a file `ci-bot` is a reader of stayed
+  encrypted (wrong identity secret, or nobody ran `eyesonly rekey` after `ci-bot` was
+  added). Set `allow-locked: true` to continue anyway.
+
+Later steps can run `git pull`, `git fetch` and `eyesonly run` without extra setup. Output
+`path` is the clone's absolute path.
+
+On a self-hosted runner, `$RUNNER_TEMP` is cleaned between jobs by the runner; the git
+configuration lives only in the job's environment.
+
+### Without the action
+
+The client reads `EYESONLY_IDENTITY` straight from the environment, so a job-level `env`
+is enough. Give git the token through a credential helper:
+
+```yaml
+    env:
+      EYESONLY_IDENTITY: ${{ secrets.EYESONLY_IDENTITY }}
     steps:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm i -g eyesonly@0.3.1
-      - name: Restore CI identity
-        env:
-          EYESONLY_IDENTITY: ${{ secrets.EYESONLY_IDENTITY }}
-        run: |
-          mkdir -p ~/.eyesonly && chmod 700 ~/.eyesonly
-          printf '%s' "$EYESONLY_IDENTITY" > ~/.eyesonly/identity.json
-          chmod 600 ~/.eyesonly/identity.json
+      - run: npm i -g eyesonly
       - name: Clone with secrets
         env:
           EYESONLY_TOKEN: ${{ secrets.EYESONLY_TOKEN }}
         run: |
-          git config --global credential.helper "store --file $HOME/.eyesonly/git-credentials"
-          printf 'https://ci-bot:%s@git.example.com\n' "$EYESONLY_TOKEN" > ~/.eyesonly/git-credentials
-          chmod 600 ~/.eyesonly/git-credentials
+          git config --global credential.helper "store --file $RUNNER_TEMP/git-credentials"
+          printf 'https://ci-bot:%s@git.example.com\n' "$EYESONLY_TOKEN" > "$RUNNER_TEMP/git-credentials"
           eyesonly clone https://ci-bot@git.example.com/app.git app
-      - run: npm ci && npm test
-        working-directory: app
+          ! head -c 11 app/.env.ci | grep -q EYESONLY-V1      # fail fast if it stayed encrypted
 ```
 
 Notes:
 
-- The identity goes in the default location, `~/.eyesonly`. If you use `EYESONLY_HOME`
-  instead, set it for every step that runs git in the repo, not just the clone. Git runs
-  the `eyesonly` filters itself during checkout, merges and `git add`, and the filters read
-  the same variable.
+- `EYESONLY_IDENTITY` (JSON or base64) wins over `$EYESONLY_HOME/identity.json`. Set it at
+  job level, not just on the clone step: git runs the `eyesonly` filters itself during
+  checkout, merges and `git add`, and the filters read the same variable.
 - With no password in the URL, the client asks git's credential helper. This keeps the token
   out of `.git/config`, which is where `eyesonly clone https://ci-bot:<token>@...` would
   leave it.
 - Error messages redact the password part of URLs, but git itself and your CI's command
   echo may not. Another reason to use the credential helper.
-- A clone without `EYESONLY_HOME` set, or with the wrong key, still succeeds (with a
-  warning). The files just stay ciphertext. Fail fast with a check:
+- A clone without an identity, or with the wrong key, still succeeds (with a warning). The
+  files just stay ciphertext, hence the check above.
+
+## Use the secrets in a job
+
+`eyesonly run` loads protected dotenv files into a command's environment, decrypted from the
+committed blobs, so nothing extra is written to disk:
 
 ```bash
-! head -c 11 app/.env.ci | grep -q EYESONLY-V1
+eyesonly run -- npm test                               # every .env / .env.* this user can read
+eyesonly run --file .env.ci -- ./deploy.sh             # just one file; refuses if unreadable
+eyesonly env --format shell > "$RUNNER_TEMP/env.sh"    # or export them for later steps (writes secrets to a file)
 ```
+
+Values in the file win over variables already set; `--no-override` flips that.
 
 ## Other CI systems
 
 The steps are the same anywhere:
 
 1. Install Node 22+, git and `npm i -g eyesonly`.
-2. Write the identity JSON to `$EYESONLY_HOME/identity.json` with mode 600.
+2. Put the identity JSON (or base64 of it) in `EYESONLY_IDENTITY` for the whole job, or
+   write it to `$EYESONLY_HOME/identity.json` with mode 600.
 3. Make the token available to git's credential helper, or embed it in the URL.
-4. Run `eyesonly clone`, with `EYESONLY_HOME` (and `EYESONLY_PIN_ADMIN`) set for every git
-   command that follows.
+4. Run `eyesonly clone`, with `EYESONLY_PIN_ADMIN` set if the policy is signed.
 
 ## CI on a GitHub/GitLab mirror
 

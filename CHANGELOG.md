@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+- `eyesonly run [--file <path>]... [--no-override] [--] <cmd>`: runs a command with protected dotenv files (default: every `.env` / `.env.*` you can read) loaded into its environment. Values are decrypted from the staged/committed blob with the same signature checks as the smudge filter, never from the working tree; a forged or moved envelope, or an explicit `--file` you can't read, aborts before the command starts. Exit codes and signals pass through.
+- `eyesonly env [--format dotenv|json|shell]`: prints the same variables.
+- `EYESONLY_IDENTITY`: the identity JSON (or base64 of it) from the environment; wins over `$EYESONLY_HOME/identity.json`. Error messages never echo it.
+- GitHub Action (`uses: jagritvats/eyesonly@v0.3`): installs eyesonly, keeps the token in a job-scoped credential helper (never in URLs or git config), clones, and fails if a file the CI user should read stayed encrypted.
+- Docs: separate secrets per environment; CI guide covers the action and `EYESONLY_IDENTITY`.
+- `clone`'s identity-mismatch warning now says which identity files are decrypted as.
+
 ## 0.3.1 (2026-11-22)
 - Fix: `eyesonly setup` in an existing clone now decrypts files for readers. It used to skip files whose stat matched the index (any freshly pulled envelope) and left the index stat stale.
 - Fix: with `core.autocrlf=true` (Git for Windows' default) readers got ciphertext. The local attribute pin now sets `-text` on protected paths.

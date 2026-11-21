@@ -79,6 +79,18 @@ export function isEnvelope(buf) {
   return buf.length >= MAGIC_BUF.length && buf.subarray(0, MAGIC_BUF.length).equals(MAGIC_BUF);
 }
 
+const CRLF_MAGIC_BUF = Buffer.from('EYESONLY-V1\r\n');
+
+/** An envelope whose line endings were converted to CRLF (e.g. core.autocrlf before smudge). */
+export function isCrlfEnvelope(buf) {
+  return buf.length >= CRLF_MAGIC_BUF.length && buf.subarray(0, CRLF_MAGIC_BUF.length).equals(CRLF_MAGIC_BUF);
+}
+
+/** Undo CRLF conversion. Envelopes never contain a CR (JSON escapes it), so this is exact. */
+export function fromCrlf(buf) {
+  return Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
+}
+
 /**
  * @param {object} o
  * @param {Buffer} o.plaintext

@@ -43,8 +43,11 @@ body() {
 # post <user> <bodyfile> <outfile> [curl args...]: prints the HTTP status
 post() {
   local u="$1" f="$2" o="$3"; shift 3
+  rm -f "$o"   # never judge a request by the previous response
+  # No `Expect: 100-continue`: when the server answers 413 early and closes, some curl builds
+  # (macOS) report the interim 100 as the status.
   curl -s -o "$o" -w '%{http_code}' --data-binary @"$f" -H 'Content-Type: application/x-git-upload-pack-request' \
-    "$@" -u "$u:${TOK[$u]}" "$BASE/app.git/git-upload-pack"
+    -H 'Expect:' "$@" -u "$u:${TOK[$u]}" "$BASE/app.git/git-upload-pack"
 }
 code_is() { local d="$1" want="$2" got="$3" o="$4" pat="${5:-}"; if [[ "$got" == "$want" ]] && { [[ -z "$pat" ]] || grep -q -- "$pat" "$o"; }; then ok "$d"; else bad "$d (got $got, want $want${pat:+ + '$pat'})"; head -c 300 "$o" | sed 's/^/        /'; echo; fi; }
 

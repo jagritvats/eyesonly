@@ -62,48 +62,59 @@ and `policy set` on the server.
 
 ## Move from GitHub mode to the server
 
-The encrypted files carry over as they are: envelopes don't depend on the mode.
+Encrypted files carry over as they are (envelopes don't depend on the mode), and so do the
+admin keys every clone pinned: nobody deletes `.git/eyesonly/trust.json`.
 
-1. **Set up the server** and register every member with their existing card. Cards are in the
-   policy (`eyesonly policy show` lists members; each member can print theirs with
-   `eyesonly whoami`):
+1. **Import the policy on the server.** It checks the repo policy's signature, registers every
+   member with the key it lists (tokens printed once), and creates the repo with the same
+   groups, file rules and writers:
 
    ```bash
-   eyesonly-server user add "$(eyesonly whoami | tail -1)"     # per member; prints their token
-   eyesonly-server repo create app.git --admin alice
-   eyesonly-server policy set app.git policy.json              # same groups and file rules as before
+   git show main:.eyesonly/policy.json > policy.json                 # in a clone
+   eyesonly-server import app.git --policy policy.json --admin-card "$(eyesonly whoami | tail -1)"
    ```
 
-   Field names match: `admins`, `groups` and `files` copy over. See
-   [policy-reference.md](policy-reference.md).
+   `--admin-card` is optional: it makes import refuse a policy that isn't signed by you.
+   Members who already exist on the server must have the same key (import never changes one).
 
-2. **Push the history** (admin):
+2. **Sign the server's policy with the same admin key** clients already pinned. The repo
+   policy's signature can't be reused: a server manifest names the server repo and lists only
+   the keys of file audiences, so it's a new document. Its version starts above the repo
+   policy's, so clients see the version go up:
 
    ```bash
-   git remote rename origin github
-   git remote add origin https://alice:<token>@git.example.com/app.git
-   git push -u origin --all && git push origin --tags
+   eyesonly-server policy manifest app.git > m.json                  # on the server
+   eyesonly policy-sign m.json > s.json                              # on your machine
+   eyesonly-server policy attest app.git s.json                      # on the server
+   ```
+
+3. **Move the repo** (admin, in a GitHub-mode clone). `migrate` checks the server's policy
+   first, then pushes every branch (including ones that only exist on the old host), every
+   tag and `refs/eyesonly/*` to a new remote `eyesonly`, and switches the clone to the server:
+
+   ```bash
+   eyesonly migrate --to https://alice:<token>@git.example.com/app.git
    ```
 
    The server checks every commit it receives, so this works only if every envelope in
-   history was signed by a member who is a writer of that path under the new policy.
+   history was signed by a writer of that path. History with plaintext secrets: see
+   [existing-repos.md](existing-repos.md#history-that-already-contains-a-plaintext-secret).
 
-3. **Switch each clone.** The clone pinned the GitHub-mode policy, so re-pin and switch
-   explicitly:
+4. **Teammates switch** with their token from step 1:
 
    ```bash
-   rm .git/eyesonly/trust.json
-   eyesonly setup --mode server
-   eyesonly status
+   git remote add eyesonly https://bob:<token>@git.example.com/app.git
+   git fetch eyesonly && eyesonly setup --remote eyesonly --mode server
    ```
 
-   Teammates do the same after `git remote set-url origin https://<them>:<token>@git.example.com/app.git`
-   and `git pull`.
+   The clone accepts the server's policy because it's signed by an admin it already pinned,
+   with a version at least as high as the last policy it saw. Anything else is refused:
+   `not signed by a pinned admin ('dave' isn't one)`, `policy version 3 is older than last
+   seen 5`, or, if step 2 was skipped, `the server's policy isn't signed yet`.
 
-4. **Clean up.** Remove `.eyesonly/` in a commit (it no longer does anything once the remote
-   is a server), sign the server policy so clients pin the admin again
-   ([signed policies](policy-reference.md#signed-policies)), and if GitHub stays, set up the
-   [mirror](../README.md#mirroring-to-githubgitlab-server) and stop pushing to it directly.
+5. **Clean up.** Make the old host read-only, or keep it as a [mirror](../README.md#mirroring-to-githubgitlab-server)
+   of the public branches. `.eyesonly/policy.json` can stay in history: when the remote is an
+   Eyes Only server, server mode always wins.
 
 Going the other way (server to GitHub mode) means running `eyesonly init` in a clone on the
 new host and granting each member again; the server's private branches don't carry over.

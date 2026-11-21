@@ -141,10 +141,14 @@ pre-commit hook re-seals it for its new path.
 | `eyesonly run -- <cmd>` | Run a command with your protected `.env` files as environment variables, decrypted from the committed blobs (`--file .env.production` to pick one; `eyesonly env` prints them) |
 | `eyesonly audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
 | `eyesonly init` · `join` · `grant` · `revoke` · `policy show` | GitHub mode: start, ask for access, give or remove it, see who can read what |
-| `eyesonly verify` | GitHub mode: check commits like the server would (pre-push hook and CI) |
+| `eyesonly grant <name> --read-only` · `--writer` | GitHub mode: read without write (`writers`), or undo it |
+| `eyesonly verify [--require-signed]` | GitHub mode: check commits like the server would (pre-push hook and CI); `--require-signed` also attributes changes to SSH commit signers (`grant <name> --ssh-signing-key`) |
+| `eyesonly migrate --to <server-url>` | Move a GitHub-mode repo onto a server after `eyesonly-server import`; pinned admin keys carry over |
+| `eyesonly whoami` | Your card, key fingerprint and admin-pin fingerprint (`EYESONLY_PIN_ADMIN`) |
 | `eyesonly setup --remote <name>` | Use a remote other than `origin` (remembered) |
 | `EYESONLY_IDENTITY` | Your identity JSON (or base64 of it) from the environment, for CI and containers ([CI guide](docs/ci.md)) |
 | `eyesonly-server init` · `user add` · `user set-key` · `policy set` | Server: bootstrap, users, keys, policy ([deployment](docs/server-deployment.md)) |
+| `eyesonly-server import <repo.git> --policy .eyesonly/policy.json` | Server: create a repo from a GitHub-mode policy (members, keys, rules) ([moving](docs/choosing-a-mode.md#move-from-github-mode-to-the-server)) |
 
 ## Guides
 

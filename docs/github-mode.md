@@ -100,6 +100,29 @@ eyesonly audit carol                               # what to rotate
 Revocation isn't retroactive: carol keeps whatever she could already decrypt, including old
 versions in history. Rotate it. The only admin can't be revoked until another admin exists.
 
+## Read-only members (writers)
+
+By default every member who can read a file can also write it. To let someone read without
+changing it:
+
+```bash
+eyesonly grant carol --card <card> --read-only     # new member, reads @core files, writes nothing
+eyesonly grant carol --read-only                   # existing member
+eyesonly revoke carol --writer                     # same thing
+eyesonly grant carol --writer                      # undo
+```
+
+This sets `writers` in the policy (an explicit list; admins always write), like the server's
+`writers`. A writer of a path is in its audience **and** a writer. It's enforced everywhere
+an envelope is made or trusted:
+
+- `git add` of an edited file: `'carol' can read but not write '.env' (read-only; writers: alice, bob)`.
+  Her unchanged checkout keeps working: git maps it back to the writer's envelope.
+- `eyesonly rekey` skips read-only files, and the merge driver refuses to re-seal:
+  `'carol' may not write '.env' (read-only); pick a side with ...`.
+- Readers' smudge, `eyesonly run` and `eyesonly verify` reject envelopes she signs anyway:
+  `signer 'carol' is not an allowed writer of '.env'` / `'.env' in <sha> has an invalid signature or its signer 'carol' may not write it`.
+
 ## Check commits: `eyesonly verify`
 
 ```bash
@@ -116,6 +139,30 @@ It runs the server's content checks against the policy on the default branch:
 - every policy change is signed by an admin of the previous policy, for the same repo, with a
   higher version, and the policy file isn't deleted,
 - the resulting tree is valid as a whole, including files that predate the range.
+
+### Attribute commits to people: `--require-signed`
+
+Without a server, verify can't know who pushed, so it attributes changes to the envelope
+signer and only reports deletions. With SSH commit signing it can do better:
+
+```bash
+eyesonly grant bob --ssh-signing-key ~/.ssh/id_ed25519.pub     # admin, once per member (key or .pub path)
+git config gpg.format ssh && git config user.signingkey ~/.ssh/id_ed25519.pub && git config commit.gpgsign true   # each member
+eyesonly verify --require-signed --range origin/main..HEAD
+```
+
+It builds git's allowed-signers file from the policy (the one that applies to each commit) and
+checks every commit with git's own signature verification. Then:
+
+- an unsigned commit, or one signed with a key that isn't in the policy, is rejected:
+  `commit 1a2b3c4d isn't signed by a member: not signed` / `...: signed with a key that is not in the policy`;
+- an edit or deletion of a protected file is attributed to the commit's signer and rejected
+  unless they may write it: `'carol' may not delete protected file '.env' (1a2b3c4d, attributed by its commit signature)`.
+
+GitHub's **Require signed commits** rule complements it: GitHub checks that every commit is
+signed by *some* verified key, `--require-signed` checks it's a member allowed to make that
+change. Merges made in GitHub's web UI are signed by GitHub, not a member, so merge locally
+or use squash/rebase merges by members. In the Action, set `require-signed: true`.
 
 A failure looks like the server's:
 
@@ -154,6 +201,7 @@ jobs:
       - uses: jagritvats/eyesonly@v0.4
         with:
           mode: verify
+          # require-signed: true                    # see --require-signed above
 ```
 
 A copy is in [examples/eyesonly-verify.yml](examples/eyesonly-verify.yml). In the repo's
@@ -171,7 +219,8 @@ To read secrets in CI as well, see [ci.md](ci.md#github-mode-read-secrets-in-ci)
 | Policy can't be loosened by a branch, rolled back, or re-signed by a non-admin | yes (signed, default branch only, pinned) | yes (with a signed policy) |
 | Plaintext push by someone **with** the client | blocked by the pre-push hook | rejected by the server |
 | Plaintext push by someone **without** the client | **detected**, not prevented: CI fails, but the plaintext is already readable by everyone with repo access. Rotate it | rejected before it's stored |
-| Who changed or deleted a file | attributed to the envelope signer; deletions are reported, not refused | the authenticated pusher |
+| Who changed or deleted a file | attributed to the envelope signer; deletions are reported, not refused (with `--require-signed`: the commit's signer, enforced) | the authenticated pusher |
+| Read-only members | `writers` in the signed policy, enforced by every client and `verify` | `writers`, enforced on push |
 | Private branches | not yet (planned: encrypted branches; name, size and timing stay visible) | invisible to non-members |
 | Force-push / rewind protection | your host's branch protection | built in |
 
@@ -188,8 +237,11 @@ up front:
 EYESONLY_PIN_ADMIN=1048:0820:8872:99c1 eyesonly clone git@github.com:acme/app.git
 ```
 
-`eyesonly policy show` prints every admin's fingerprint. After that, only a policy signed by
-a pinned admin is accepted, and admin changes come only through such a policy.
+`eyesonly whoami` prints your own pin fingerprint (`admin pin  1048:0820:8872:99c1`) so an
+admin can hand it out; `eyesonly policy show` prints every admin's, plus what this clone
+pinned, and `eyesonly status` prints the pinned admins. After that, only a policy signed by a
+pinned admin is accepted, and admin changes come only through such a policy (every admin it
+lists is pinned).
 
 ## Switching modes
 
@@ -198,4 +250,6 @@ that turns out to be an Eyes Only server, or a repo whose default branch gains a
 needs an explicit `eyesonly setup --mode server|repo`. When the remote is an Eyes Only server,
 server mode always wins, so a policy file committed to a server repo changes nothing.
 
-Moving a GitHub-mode repo onto the server: [choosing a mode](choosing-a-mode.md#move-from-github-mode-to-the-server).
+Moving a GitHub-mode repo onto the server keeps every pinned admin key:
+`eyesonly-server import`, one signature, then `eyesonly migrate`. See
+[choosing a mode](choosing-a-mode.md#move-from-github-mode-to-the-server).

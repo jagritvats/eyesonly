@@ -21,6 +21,29 @@ hook and CI) prints the same `REJECTED: ...` lines. Admin CLI errors start with
 elsewhere, export `EYESONLY_HOME` in your shell profile. Git runs the filters with your
 environment.
 
+### `no identity in the macOS Keychain (eyesonly/alice), but ...config.json says it's there. Restore the keychain entry, ...`
+
+(or `Windows DPAPI` / `Secret Service (secret-tool)`.)
+**Cause:** `config.json` says the key is in the OS keychain, but the entry is gone: the
+keychain was reset, `identity.dpapi` was deleted, or you're on a different OS account
+(DPAPI is tied to your Windows account).
+**Fix:** restore the keychain entry from a backup. If you have a copy of the identity JSON,
+put it at `~/.eyesonly/identity.json` and delete `config.json`. Otherwise make a new key and
+have your admin swap it in ([team-workflows.md](team-workflows.md#lost-private-key-or-new-machine)).
+
+### `the OS keychain isn't available here (...). Use --store file, or set EYESONLY_IDENTITY`
+
+**Cause:** Linux without `secret-tool` (package `libsecret-tools`) or without a D-Bus
+session with a keyring, which is common on servers and in containers.
+**Fix:** `eyesonly keygen <name>` (file store), or pass the identity as `EYESONLY_IDENTITY`.
+
+### `couldn't save the identity to the ...` / `couldn't read the identity from the ...`
+
+**Cause:** the keychain tool refused: a locked macOS keychain, a denied access prompt, or
+PowerShell blocked by policy on Windows.
+**Fix:** unlock the keychain (macOS: `security unlock-keychain`) and retry. Nothing changed:
+`keygen` and `identity move` only switch stores after reading the new copy back.
+
 ### `no eyesonly policy cached for this repo. Run: eyesonly setup`
 
 **Cause:** this clone was made with plain `git clone`, or the policy cache was deleted.

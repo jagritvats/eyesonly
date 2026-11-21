@@ -289,6 +289,39 @@ eyesonly pull-policy        # pins the current signer; compare the printed finge
 
 Set `EYESONLY_PIN_ADMIN=<fingerprint>` while doing this to refuse anything else.
 
+## Keep your key in the OS keychain
+
+By default your private identity is `~/.eyesonly/identity.json` (mode 0600). To keep it in
+the operating system's keychain instead:
+
+```bash
+eyesonly keygen alice --store keychain     # new identity, straight into the keychain
+eyesonly identity move --to keychain       # or move the one you have
+eyesonly identity show                     # where it lives, name, fingerprint
+```
+
+| OS | Where it goes |
+|---|---|
+| macOS | Keychain (generic password, service `eyesonly`, account `<name>`) |
+| Windows | DPAPI (CurrentUser): `~/.eyesonly/identity.dpapi`, readable only by your Windows account |
+| Linux | Secret Service through `secret-tool` (GNOME Keyring, KWallet); needs a D-Bus session |
+
+- The move writes the new copy, reads it back and compares it before deleting the old
+  one, so a failed move leaves the identity where it was. `eyesonly identity move --to file`
+  goes the other way.
+- `~/.eyesonly/config.json` records the choice. It holds no key material.
+- The key is handed to the keychain tools on stdin, never on a command line. The
+  long-running filter reads it once per git command, not once per file.
+- What it protects against: a stolen disk or backup, another local user, a stray
+  `cat ~/.eyesonly/*` in a screen share. What it doesn't: malware running as you can ask
+  the keychain for it like any other keychain secret.
+- On a headless Linux box with no keyring, use the file store or `EYESONLY_IDENTITY`.
+- `eyesonly doctor` warns when the key is a plain file.
+
+`EYESONLY_IDENTITY` still wins over both stores. CI should keep using it
+([ci.md](ci.md)); `eyesonly identity export --yes` prints the value to paste into a CI
+secret.
+
 ## Lost private key or new machine
 
 There's no key escrow. A user who loses `~/.eyesonly/identity.json`, or wants a fresh key

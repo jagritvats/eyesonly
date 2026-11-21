@@ -69,8 +69,8 @@ echo "== client: filter=veil is pinned in .git/info/attributes"
 expect_ok "bob clones" as bob $VEIL clone "$(url bob)" "$SB/bob"
 cd "$SB/bob"
 check "info/attributes has the managed block" grep -qF '# >>> veil (managed) >>>' .git/info/attributes
-check "...with '/.env filter=veil diff=veil'" grep -qxF '/.env filter=veil diff=veil' .git/info/attributes
-check "...and '/secrets/** filter=veil diff=veil'" grep -qxF '/secrets/** filter=veil diff=veil' .git/info/attributes
+check "...with '/.env filter=veil diff=veil merge=veil'" grep -qxF '/.env filter=veil diff=veil merge=veil' .git/info/attributes
+check "...and '/secrets/** filter=veil diff=veil merge=veil'" grep -qxF '/secrets/** filter=veil diff=veil merge=veil' .git/info/attributes
 echo '.env filter=lfs' >> .gitattributes
 expect_out "with an in-tree '.env filter=lfs' override, .env still resolves to veil" ".env: filter: veil" git check-attr filter -- .env
 git config filter.lfs.clean "cat > '$SB/leak'"   # stand-in for git-lfs: anything it sees, it 'uploads'
@@ -94,7 +94,7 @@ reset_main bob "$SB/bob"
 printf '*.bin binary\r\n# mine\r\n' > .git/info/attributes
 as bob $VEIL pull-policy 2>/dev/null
 as bob $VEIL pull-policy 2>/dev/null
-check "pull-policy restores the block" grep -qxF '/.env filter=veil diff=veil' .git/info/attributes
+check "pull-policy restores the block" grep -qxF '/.env filter=veil diff=veil merge=veil' .git/info/attributes
 [[ "$(grep -c '>>> veil (managed)' .git/info/attributes)" == 1 ]] && ok "running it twice leaves exactly one block" || bad "duplicate managed block"
 check "the user's own CRLF lines survive byte for byte" grep -q $'^\\*\\.bin binary\r$' .git/info/attributes
 echo '.env filter=lfs' >> .gitattributes

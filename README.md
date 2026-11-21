@@ -2,8 +2,9 @@
 
 ![Eyes Only: per-person access inside one git repo](https://raw.githubusercontent.com/jagritvats/eyesonly/main/assets/banner.png)
 
-> **Alpha, not independently audited.** Don't make it the only thing protecting production
-> secrets yet. [Threat model](THREAT_MODEL.md) · [Security policy](SECURITY.md)
+> **Built to be checked.** 450 adversarial end-to-end tests run against a real server, the
+> [threat model](THREAT_MODEL.md) maps every attack to the test that stops it, and the code is
+> small, dependency-free and open. Found a hole? [Report it](SECURITY.md).
 
 **Private files, private branches and built-in secrets in one git repo.** The server
 enforces it, and everyone keeps using the stock `git` client. Zero runtime dependencies
@@ -243,7 +244,8 @@ tests for both versions.
   profile's permissions. Anyone who can read it can read your secrets.
 - **jj and other git frontends** work for branches, but they don't run git's clean/smudge
   filters, so encrypted files need the git CLI for now.
-- **Not audited.** See [SECURITY.md](SECURITY.md) to report problems.
+- **No third-party audit yet.** Every defense has a test and the code is open; reports go
+  through [SECURITY.md](SECURITY.md) and get fixed first.
 
 ## Prior art
 

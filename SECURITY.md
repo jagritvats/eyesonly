@@ -1,8 +1,8 @@
 # Security policy
 
-**Eyes Only is unaudited alpha software.** Don't make it the only thing protecting
-production secrets yet. [THREAT_MODEL.md](THREAT_MODEL.md) lists what it defends against,
-the test for each defense, and the known limitations.
+[THREAT_MODEL.md](THREAT_MODEL.md) lists what Eyes Only defends against, the test for each
+defense, and the known limitations. There's been no third-party audit yet, so outside review
+is especially welcome, and security reports are always our top priority.
 
 ## Reporting a vulnerability
 
@@ -36,4 +36,4 @@ worse than we describe, we still want to hear it.
 
 ## Supported versions
 
-During the alpha, only the latest release gets fixes.
+Before 1.0, only the latest release gets fixes.

@@ -75,7 +75,7 @@ transport, hosting a GitHub/GitLab-compatible API, SSO, key escrow, partial clon
 | **0.1 MVP** (done) | Everything above | 47/47 e2e checks green |
 | **0.2 Trust the client, not the host** (done) | Admin-signed policy + client key pinning (vs. a lying server); have-negotiation oracle closed; pre-commit hook that rekeys on `git mv` / policy change | 200/200 checks across 4 suites |
 | **0.3 Ergonomics** | Long-running filter protocol (`filter.<x>.process`) for speed; reuse SSH ed25519 keys (age-style); `veil grant/revoke` admin API over HTTP; pre-commit hook that rekeys on `git mv` | Clone of a 10k-file repo < 2× plain git |
-| **0.4 Hosted mirror** | Veil sits in front of GitHub/GitLab as a mirror: the private refs and the policy live in Veil, and the public refs are pushed through to GitHub so existing CI and PRs still work | One design partner running prod deploys through it |
+| **0.4 Hosted mirror** (outbound mirror (manual/cron) shipped; inbound sync next) | Veil sits in front of GitHub/GitLab as a mirror: the private refs and the policy live in Veil, and the public refs are pushed through to GitHub so existing CI and PRs still work | One design partner running prod deploys through it |
 | **0.5 Teams** | Web dashboard: policy editor, audit log ("who could read STRIPE_KEY on 2026-03-01"), offboarding wizard that runs `audit` and opens rotation tasks | Paid pilot |
 | **1.0** | SSO/SCIM groups → policy groups, hardware keys (WebAuthn PRF), CI identities with short-lived keys, SOC 2 | 10 paying teams |
 

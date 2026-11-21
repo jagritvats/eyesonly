@@ -74,7 +74,7 @@ check "pre-commit.local keeps its exec bit" test -x "$SB/bob2/.git/hooks/pre-com
 in_ "$SB/bob2" as bob bash -c 'echo "// tweak" >> index.js && git add index.js'
 expect_ok "bob commits public code with the chained hook" in_ "$SB/bob2" as bob env MARK="$SB/mark1" git commit -qm tweak
 check "the user hook ran (its marker file exists)" test -f "$SB/mark1"
-in_ "$SB/bob2" bash -c 'echo STRIPE_SECRET=plain > .env && git -c filter.eyesonly.clean=cat add .env'
+in_ "$SB/bob2" bash -c 'echo STRIPE_SECRET=plain > .env && git -c filter.eyesonly.process= -c filter.eyesonly.required=false -c filter.eyesonly.clean=cat add .env'
 expect_reject "eyesonly's check also runs in the chain (plaintext refused)" "plaintext staged for protected path .env" \
   in_ "$SB/bob2" as bob env MARK="$SB/mark2" git commit -qm plain
 check "...after the user hook ran" test -f "$SB/mark2"
@@ -140,14 +140,14 @@ as junior git reset -q --hard
 echo "== filter bypass"
 cd "$SB/alice"
 echo 'STRIPE_SECRET=sk_live_plain' > .env
-as alice git -c filter.eyesonly.clean=cat add .env
+as alice git -c filter.eyesonly.process= -c filter.eyesonly.required=false -c filter.eyesonly.clean=cat add .env
 expect_reject "plaintext staged via filter bypass is refused" "plaintext staged for protected path .env" as alice git commit -qm plain
 as alice git commit -q --no-verify -m plain
 expect_reject "with --no-verify the server still rejects the plaintext" "NOT encrypted" as alice git push -q
 as alice git reset -q --hard origin/main
 cd "$SB/junior"
 echo 'DB=leak' > .env
-NOF="-c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat"   # junior controls their client
+NOF="-c filter.eyesonly.process= -c filter.eyesonly.required=false -c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat"   # junior controls their client
 as junior git $NOF add .env
 expect_reject "junior's plaintext .env is refused locally" "plaintext staged for protected path .env" as junior git $NOF commit -qm leak
 as junior git $NOF commit -q --no-verify -m leak

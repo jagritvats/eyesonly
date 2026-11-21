@@ -25,6 +25,7 @@ const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bi
 
 const MARK_BEGIN = '# >>> eyesonly pre-commit >>>';
 const MARK_END = '# <<< eyesonly pre-commit <<<';
+export { MARK_BEGIN as HOOK_MARK };
 
 const log = (msg) => console.error('[eyesonly] ' + msg);
 
@@ -69,16 +70,19 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-function eyesonlyBlock() {
-  return `${MARK_BEGIN}\n${q(process.execPath)} ${q(CLI)} pre-commit || exit 1\n${MARK_END}\n`;
+function eyesonlyBlock(command) {
+  return `${MARK_BEGIN}\n${command} pre-commit || exit 1\n${MARK_END}\n`;
 }
 
-/** Install (or refresh) the eyesonly pre-commit hook, chaining any existing user hook. */
-export function installPreCommitHook(cwd) {
+/**
+ * Install (or refresh) the eyesonly pre-commit hook, chaining any existing user hook.
+ * `command` runs the CLI: `eyesonly` from PATH, or quoted node + script paths.
+ */
+export function installPreCommitHook(cwd, command = `${q(process.execPath)} ${q(CLI)}`) {
   const hook = path.resolve(cwd, gitStr(['rev-parse', '--git-path', 'hooks/pre-commit'], { cwd }));
   const dir = path.dirname(hook);
   fs.mkdirSync(dir, { recursive: true });
-  const block = eyesonlyBlock();
+  const block = eyesonlyBlock(command);
 
   if (!fs.existsSync(hook)) {
     fs.writeFileSync(hook, '#!/bin/sh\n' + block, { mode: 0o755 });

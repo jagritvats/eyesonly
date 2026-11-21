@@ -12,6 +12,13 @@
 - GitHub Action (`uses: jagritvats/eyesonly@v0.3`): installs eyesonly, keeps the token in a job-scoped credential helper (never in URLs or git config), clones, and fails if a file the CI user should read stayed encrypted.
 - Docs: separate secrets per environment; CI guide covers the action and `EYESONLY_IDENTITY`.
 - `clone`'s identity-mismatch warning now says which identity files are decrypted as.
+- Long-running filter process (`filter.eyesonly.process`, git's protocol v2): one process per git command instead of one per protected file. Advertises only `clean` and `smudge`, never `delay`. On Windows with 200 protected files: `git add` 33-51 s -> 4.3 s, `eyesonly clone` 23 s -> 6-9 s, `git status` after a touch 24-27 s -> 6.5 s. Single-shot clean/smudge stay configured as the fallback.
+- `eyesonly setup --remote <name>` / `pull-policy --remote <name>`: use a remote other than `origin` for the Eyes Only server (remembered in `eyesonly.remote`), so GitHub can stay `origin`.
+- `eyesonly clone https://user:token@...` hands the token to your git credential helper when one is configured and keeps only the user name in `.git/config`.
+- Filter, merge and hook commands use `eyesonly` from PATH when it is the same package, so they survive node upgrades and package moves; otherwise absolute paths as before.
+- `eyesonly doctor`: checks identity, remote, token storage, filters, hook, pinned attributes and policy freshness against the server; exits non-zero with a fix for each problem.
+- The clean filter refuses ciphertext that was edited or doesn't verify (e.g. a non-reader's editor appended to `.env`) instead of letting the server reject it at push time.
+- Envelopes whose line endings were converted (`core.autocrlf`) are repaired on smudge and clean, and `eyesonly status` reports them as `corrupted` instead of `decrypted`.
 
 ## 0.3.1 (2026-11-22)
 - Fix: `eyesonly setup` in an existing clone now decrypts files for readers. It used to skip files whose stat matched the index (any freshly pulled envelope) and left the index stat stale.

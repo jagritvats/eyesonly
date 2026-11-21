@@ -5,6 +5,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/test/lib/compat.sh"
 SB="$(mktemp -d)"; export SB
 export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 EYESONLY="node $ROOT/bin/eyesonly.mjs"
@@ -149,7 +150,7 @@ mv "$SB/bob-path/.git/hooks/pre-commit" "$SB/hook.bak"
 expect_reject "doctor: missing hook" "pre-commit hook is missing" in_ "$SB/bob-path" as bob $EYESONLY doctor
 mv "$SB/hook.bak" "$SB/bob-path/.git/hooks/pre-commit"
 cp "$SB/bob-path/.git/info/attributes" "$SB/attrs.bak"
-sed -i 's/ -text$//' "$SB/bob-path/.git/info/attributes"
+sedi 's/ -text$//' "$SB/bob-path/.git/info/attributes"
 expect_reject "doctor: pinned attributes without -text" "pinned attributes missing or outdated" in_ "$SB/bob-path" as bob $EYESONLY doctor
 cp "$SB/attrs.bak" "$SB/bob-path/.git/info/attributes"
 cp_pkg "$SB/pkg3"

@@ -202,7 +202,9 @@ rm -f "$SB/bob-fresh/secrets/big.bin"; in_ "$SB/bob-fresh" as bob git checkout -
 [[ -z "$(in_ "$SB/bob-fresh" as bob git status --porcelain)" ]] && ok "a 900 KB secret is clean after checkout" || { bad "large secret stays modified"; in_ "$SB/bob-fresh" as bob git status --porcelain | sed 's/^/        /'; }
 
 $VS repo create empty.git --admin alice 2>/dev/null
-expect_out "eyesonly clone of an empty repo succeeds" "cloned an empty repository" as bob $EYESONLY clone "http://bob:${TOK[bob]}@127.0.0.1:$PORT/empty.git" "$SB/empty"
+# Run once and grep the file: piping into `grep -q` under pipefail can fail on SIGPIPE.
+as bob $EYESONLY clone "http://bob:${TOK[bob]}@127.0.0.1:$PORT/empty.git" "$SB/empty" >"$SB/empty.out" 2>&1; EC=$?
+[[ $EC == 0 ]] && grep -q "cloned an empty repository" "$SB/empty.out" && ok "eyesonly clone of an empty repo succeeds" || { bad "eyesonly clone of an empty repo (exit $EC)"; tail -n 8 "$SB/empty.out" | sed 's/^/        /'; }
 
 echo
 echo "$PASS passed, $FAIL failed"

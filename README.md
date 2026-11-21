@@ -42,7 +42,7 @@ junior can't list, fetch (even by SHA over protocol v2) or push to `private/*`; 
 plaintext push is rejected by the server; and alice's accidental merge of private history
 into `main` is rejected while a squash merge goes through.
 
-Proof beyond the demo: `npm test` runs 507 adversarial end-to-end checks (10 suites) against
+Proof beyond the demo: `npm test` runs 615 adversarial end-to-end checks (12 suites) against
 a real server, with an attacker who controls their own git client.
 
 ## Install
@@ -56,8 +56,8 @@ Server in Docker: `docker build -t eyesonly . && docker run -p 8787:8787 -v eyes
 Put TLS in front of it either way, and a reverse proxy (Caddy, nginx) if you want rate
 limiting or request timeouts; the server has neither built in.
 
-The client runs on Linux, macOS and Windows (Git for Windows). The server is tested on
-Linux and macOS.
+Client and server run on Linux, macOS and Windows (Git for Windows); CI runs every suite
+and the demo on all three.
 
 ## Quickstart
 

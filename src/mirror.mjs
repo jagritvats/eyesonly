@@ -103,7 +103,10 @@ function checkUrl(url, allowLocal) {
     if (!u.hostname || u.hostname.startsWith('-')) fail('mirror url has an invalid host');
     return;
   }
-  if (/^file:\/\//i.test(url) || url.startsWith('/')) {
+  // Windows drive paths (C:/x, C:\x), UNC paths and anything with a backslash are local
+  // paths to git, not scp-like host:path urls.
+  const winPath = /^[A-Za-z]:[\\/]/.test(url) || url.includes('\\');
+  if (/^file:\/\//i.test(url) || url.startsWith('/') || winPath) {
     if (!allowLocal) fail('local mirror urls (file:// or a path) are only allowed with --allow-local');
     return;
   }
@@ -134,7 +137,8 @@ function checkCredentialFile(file, dir) {
     fail(`credential file ${file} does not exist`);
   }
   if (!st.isFile()) fail(`credential file ${file} must be a regular file (not a symlink)`);
-  if ((st.mode & 0o777) !== 0o600) fail(`credential file ${file} must have mode 0600 (it has ${(st.mode & 0o777).toString(8)}); run chmod 600 ${file}`);
+  // Windows has no POSIX modes (protect the file with NTFS permissions there).
+  if (process.platform !== 'win32' && (st.mode & 0o777) !== 0o600) fail(`credential file ${file} must have mode 0600 (it has ${(st.mode & 0o777).toString(8)}); run chmod 600 ${file}`);
   const real = fs.realpathSync(file);
   const rel = path.relative(fs.realpathSync(dir), real);
   if (!rel.startsWith('..') && !path.isAbsolute(rel)) fail(`credential file must live outside the repo directory ${dir}`);

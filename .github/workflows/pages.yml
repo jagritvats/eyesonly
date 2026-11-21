@@ -1,9 +1,9 @@
-# Deploys the landing page (site/ + assets/) to GitHub Pages.
+# Deploys the landing page (site/ + assets/) and the guides (docs/*.md) to GitHub Pages.
 name: pages
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'assets/**', '.github/workflows/pages.yml']
+    paths: ['site/**', 'assets/**', 'docs/**', 'scripts/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,7 +20,16 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
-      - run: mkdir -p _site && cp -r site/. _site/ && mkdir -p _site/assets && cp assets/*.png assets/*.gif _site/assets/
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Assemble site
+        run: |
+          mkdir -p _site/assets
+          cp -r site/. _site/
+          cp assets/*.png assets/*.gif _site/assets/
+      - name: Build guides
+        run: node scripts/build-docs.mjs _site
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site

@@ -71,7 +71,7 @@ export function adminFingerprint(ed25519b64) {
   return sha256hex(ed25519b64).slice(0, 16).match(/.{4}/g).join(':');
 }
 
-function validManifest(m) {
+export function validManifest(m) {
   const names = (a) => Array.isArray(a) && a.every((x) => typeof x === 'string');
   return (
     m && m.v === 1 && typeof m.repo === 'string' && Number.isInteger(m.version) && m.version >= 1 &&

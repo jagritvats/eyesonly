@@ -118,7 +118,7 @@ function cmdWhoami() {
 // ------------------------------------------------------------------ policy
 
 // Eyes Only state lives in the common git dir, shared by every `git worktree`.
-function gitDir() {
+export function gitDir() {
   const { gitDir: own, common } = attrs.gitDirs();
   if (own !== common) migrateWorktreeState(own, common);
   return common;
@@ -220,7 +220,7 @@ async function loadResolved(remoteUrl, gitDirOrNull, remoteName) {
   return r;
 }
 
-function saveResolved({ policy, trust }, dir) {
+export function saveResolved({ policy, trust }, dir) {
   writePolicy(policy, dir);
   if (trust) attest.saveTrust(dir || gitDir(), trust);
   attrs.pinAttributes(pinnedLines(policy), dir || gitDir()); // clone, setup and pull-policy all pin
@@ -262,7 +262,8 @@ function cliCommand(cwd) {
   return absolute;
 }
 
-function configureFilters(cwd) {
+/** Wire up filters, merge driver and pre-commit hook. Returns the CLI command it used. */
+export function configureFilters(cwd) {
   const base = cliCommand(cwd);
   const set = (k, v) => git(['config', '--local', k, v], { cwd });
   // git prefers the long-running `process` filter; clean/smudge stay as the fallback for
@@ -276,6 +277,7 @@ function configureFilters(cwd) {
   set('merge.eyesonly.name', 'eyesonly decrypt-merge-reseal');
   set('merge.eyesonly.driver', `${base} merge-file %O %A %B %P %L`);
   installPreCommitHook(cwd, base);
+  return base;
 }
 
 /** Policy globs are root-anchored; translate them to .gitattributes lines. */
@@ -289,7 +291,7 @@ function attributeLines(policy) {
 // .gitattributes stay the same for everyone.
 const pinnedLines = (policy) => attributeLines(policy).map((l) => `${l} -text`);
 
-function ensureAttributes(policy, cwd) {
+export function ensureAttributes(policy, cwd) {
   attrs.pinAttributes(pinnedLines(policy), attrs.commonGitDir(cwd)); // wins over any in-tree .gitattributes
   const p = path.join(cwd, '.gitattributes');
   const existing = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
@@ -313,7 +315,7 @@ function ensureAttributes(policy, cwd) {
   return true;
 }
 
-function protectedFiles(policy, cwd) {
+export function protectedFiles(policy, cwd) {
   // `-t` tags skip-worktree entries 'S': a sparse checkout must not materialize excluded secrets.
   const out = gitStr(['ls-files', '-t', '-z'], { cwd });
   return out
@@ -344,7 +346,7 @@ function resolveRemote(cwd, flag) {
   return { name, url };
 }
 
-function repoTop() {
+export function repoTop() {
   try {
     return gitStr(['rev-parse', '--show-toplevel']);
   } catch {
@@ -352,20 +354,11 @@ function repoTop() {
   }
 }
 
-async function cmdSetup(args = []) {
-  const { flags } = takeFlags(args, ['remote']);
-  const top = repoTop();
-  const remote = resolveRemote(top, flags.remote);
-  const resolved = await loadResolved(remote.url, gitDir(), remote.name);
-  const { policy } = resolved;
-  const id = loadIdentity({ required: false });
-  if (id && policy.user !== id.name) log(`warning: server says you are '${policy.user}' but your identity is '${id.name}'`);
-  saveResolved(resolved);
-  configureFilters(top);
-  ensureAttributes(policy, top);
+/** Re-smudge protected files that are still envelopes, so readers get plaintext. */
+export function resmudge(policy, top) {
   const files = protectedFiles(policy, top);
-  // Re-smudge. `checkout-index -f` skips files whose stat matches the index (a freshly
-  // pulled envelope), so remove working copies that are still envelopes first. Plaintext
+  // `checkout-index -f` skips files whose stat matches the index (a freshly pulled
+  // envelope), so remove working copies that are still envelopes first. Plaintext
   // working copies are left alone: they're already decrypted or hold local edits.
   const sealed = files.filter((f) => {
     try {
@@ -376,12 +369,57 @@ async function cmdSetup(args = []) {
   });
   for (const f of sealed) fs.rmSync(path.join(top, f), { force: true });
   if (sealed.length) git(['checkout-index', '-f', '-u', '--', ...sealed], { cwd: top }); // -u: refresh index stat
+  return files;
+}
+
+const repoMode = () => import('./repo-mode.mjs');
+
+/** The remote eyesonly uses, without requiring it to exist (repo mode works without one). */
+function remoteHint(cwd, flag) {
+  let name = flag;
+  if (!name) {
+    try {
+      name = gitStr(['config', 'eyesonly.remote'], { cwd }) || null;
+    } catch {}
+  }
+  const named = Boolean(name); // chosen with --remote or remembered, so it must exist
+  name ||= 'origin';
+  let url = null;
+  try {
+    url = gitStr(['config', `remote.${name}.url`], { cwd });
+  } catch {}
+  return { name, url, named };
+}
+
+async function cmdSetup(args = []) {
+  const { flags } = takeFlags(args, ['remote', 'mode']);
+  const top = repoTop();
+  const rm = await repoMode();
+  const hint = remoteHint(top, flags.remote);
+  if ((await rm.detectMode(top, { explicit: flags.mode, remote: hint })) === 'repo') {
+    if (flags.remote) git(['config', '--local', 'eyesonly.remote', flags.remote], { cwd: top });
+    return rm.setupRepo(top, hint.name);
+  }
+  const remote = resolveRemote(top, flags.remote);
+  const resolved = await loadResolved(remote.url, gitDir(), remote.name);
+  const { policy } = resolved;
+  const id = loadIdentity({ required: false });
+  if (id && policy.user !== id.name) log(`warning: server says you are '${policy.user}' but your identity is '${id.name}'`);
+  saveResolved(resolved);
+  configureFilters(top);
+  git(['config', '--local', 'eyesonly.mode', 'server'], { cwd: top });
+  ensureAttributes(policy, top);
+  const files = resmudge(policy, top);
   log(`ready (remote '${remote.name}'). ${files.length} protected file(s) in this checkout.`);
 }
 
 async function cmdPullPolicy(args = []) {
-  const { flags } = takeFlags(args, ['remote']);
-  const remote = resolveRemote(repoTop(), flags.remote);
+  const { flags } = takeFlags(args, ['remote', 'mode']);
+  const top = repoTop();
+  const rm = await repoMode();
+  const hint = remoteHint(top, flags.remote);
+  if ((await rm.detectMode(top, { explicit: flags.mode, remote: hint })) === 'repo') return rm.pullRepoPolicy(top, hint.name);
+  const remote = resolveRemote(top, flags.remote);
   saveResolved(await loadResolved(remote.url, gitDir(), remote.name));
   log(`policy updated from remote '${remote.name}'. Run \`eyesonly rekey\` if file access changed.`);
 }
@@ -422,6 +460,9 @@ function storeToken(url) {
 
 async function cmdClone([url, dir]) {
   if (!url) die('usage: eyesonly clone <url> [dir]');
+  // No Eyes Only server behind the URL: a plain git host with the policy in the repo.
+  const rm = await repoMode();
+  if (!(await rm.probeServer(url)) && (await rm.cloneRepo(url, dir, { fallback: /^https?:\/\//.test(url) }))) return;
   const resolved = await loadResolved(url, null); // before cloning: a bad policy leaves nothing behind
   const { policy } = resolved;
   const id = loadIdentity({ required: false });
@@ -431,6 +472,7 @@ async function cmdClone([url, dir]) {
   execFileSync('git', ['clone', '--quiet', '--no-checkout', storeToken(url), dir], { stdio: 'inherit' });
   saveResolved(resolved, path.join(dir, '.git'));
   configureFilters(dir);
+  git(['config', '--local', 'eyesonly.mode', 'server'], { cwd: dir });
   if (spawnSync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: dir }).status !== 0) {
     // Protocol v0 can't advertise an unborn HEAD, so git falls back to init.defaultBranch
     // (often master). eyesonly-server creates every repo on main: start there too.
@@ -592,11 +634,12 @@ function cmdTextconv([file]) {
 
 // ------------------------------------------------------------ team commands
 
-function cmdStatus() {
+async function cmdStatus() {
   const policy = loadPolicy();
   const id = loadIdentity({ required: false });
   const top = gitStr(['rev-parse', '--show-toplevel']);
-  console.log(`repo ${policy.repo} as ${policy.user}${id ? '' : ' (no local identity!)'}`);
+  console.log(`repo ${policy.repo} as ${policy.user ?? id?.name ?? '(no identity)'}${id ? '' : ' (no local identity!)'}${policy.mode === 'repo' ? `  [repo mode, policy v${policy.version}]` : ''}`);
+  if (policy.mode === 'repo') await (await repoMode()).warnIfPolicyBehind(policy, top);
   for (const f of protectedFiles(policy, top)) {
     const allowed = fileRule(policy, f);
     const work = fs.existsSync(path.join(top, f)) ? fs.readFileSync(path.join(top, f)) : null;
@@ -704,11 +747,16 @@ async function cmdDoctor(args = []) {
     process.exit(problems ? 1 : 0);
   }
   console.log(`repo ${top}`);
+  let isRepoMode = false;
+  try {
+    isRepoMode = gitStr(['config', '--local', 'eyesonly.mode'], { cwd: top }) === 'repo';
+  } catch {}
 
-  // remote and credentials
-  const rr = await attempt(() => resolveRemote(top, flags.remote));
+  // remote and credentials (repo mode: the signed policy in the repo instead)
+  const rr = isRepoMode ? {} : await attempt(() => resolveRemote(top, flags.remote));
   const remote = rr.value;
-  if (rr.error) fail(rr.error.split('\n')[0], 'git remote add origin https://<you>@<server>/<repo>.git, or eyesonly setup --remote <name>');
+  if (isRepoMode) await (await repoMode()).doctorRepo(top, { ok, warn, fail, id, remote: remoteHint(top, flags.remote).name });
+  else if (rr.error) fail(rr.error.split('\n')[0], 'git remote add origin https://<you>@<server>/<repo>.git, or eyesonly setup --remote <name>');
   else {
     ok(`remote '${remote.name}' -> ${redact(remote.url)}`);
     let u = null;
@@ -722,7 +770,7 @@ async function cmdDoctor(args = []) {
   // policy cache vs server
   const policy = loadPolicy({ required: false });
   if (!policy) fail('no policy cached for this clone', 'eyesonly setup');
-  else {
+  else if (!isRepoMode) {
     const age = Date.now() - fs.statSync(policyPath()).mtimeMs;
     ok(`policy cached for '${policy.user}' (${Math.round(age / 3600000)}h old)`);
     if (id && policy.user !== id.name) fail(`the server knows you as '${policy.user}' but your identity is '${id.name}'`, 'use the identity and token that belong together (EYESONLY_HOME, remote URL user)');
@@ -828,8 +876,10 @@ const USAGE = `eyesonly: per-user access control for git
   eyesonly keygen <name>       create your identity (~/.eyesonly/identity.json)
   eyesonly whoami              print your public card
   eyesonly clone <url> [dir]   clone an eyesonly repo and decrypt what you're allowed to read
-  eyesonly setup [--remote <r>]        enable eyesonly in an existing clone (remote default: origin)
-  eyesonly pull-policy [--remote <r>]  refresh the cached access policy from the server
+  eyesonly setup [--remote <r>] [--mode repo|server]
+                               enable eyesonly in an existing clone (mode is detected)
+  eyesonly pull-policy [--remote <r>]
+                               refresh the cached policy (server, or the repo's default branch)
   eyesonly doctor              check this machine and clone, and say how to fix problems
   eyesonly policy-sign <file>  (admin) sign a policy manifest from eyesonly-server policy manifest
   eyesonly status              list protected files and whether you can read them
@@ -840,9 +890,19 @@ const USAGE = `eyesonly: per-user access control for git
   eyesonly env [--file <path>]... [--format dotenv|json|shell]
                                print those variables (writes secrets to stdout)
 
+repo mode (no server; the signed policy lives in .eyesonly/policy.json):
+  eyesonly init [--files .env,secrets/**] [--group core] [--commit]
+                               (admin) start using eyesonly in this repo
+  eyesonly join                write your public card to .eyesonly/requests/ for an admin to grant
+  eyesonly grant <name> [--card <card> | --from-request] [--group <g>] [--files <glob>] [--admin]
+  eyesonly revoke <name> [--group <g>]
+  eyesonly policy show         rules, members, admins and their fingerprints
+  eyesonly verify [<base> [<head>]] | --range <a>..<b>
+                               check commits like the server would (CI and the pre-push hook)
+
 identity: EYESONLY_IDENTITY (JSON or base64 of it), else $EYESONLY_HOME/identity.json
 
-internal (wired up by setup): filter-process | clean %f | smudge %f | textconv <file> | pre-commit | merge-file`;
+internal (wired up by setup): filter-process | clean %f | smudge %f | textconv <file> | pre-commit | pre-push | merge-file`;
 
 export async function main(argv) {
   const [cmd, ...rest] = argv;
@@ -868,6 +928,13 @@ export async function main(argv) {
     'merge-file': (a) => import('./merge.mjs').then((m) => m.cmdMergeFile(a)),
     run: (a) => import('./run.mjs').then((m) => m.cmdRun(a)),
     env: (a) => import('./run.mjs').then((m) => m.cmdEnv(a)),
+    init: (a) => repoMode().then((m) => m.cmdInit(a)),
+    join: (a) => repoMode().then((m) => m.cmdJoin(a)),
+    grant: (a) => repoMode().then((m) => m.cmdGrant(a)),
+    revoke: (a) => repoMode().then((m) => m.cmdRevoke(a)),
+    policy: (a) => repoMode().then((m) => m.cmdPolicy(a)),
+    verify: (a) => import('./verify.mjs').then((m) => m.cmdVerify(a)),
+    'pre-push': (a) => import('./verify.mjs').then((m) => m.cmdPrePush(a)),
     'filter-process': cmdFilterProcess,
     doctor: cmdDoctor,
     '__cli-path': () => console.log(realOrSelf(CLI)),

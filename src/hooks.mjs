@@ -23,9 +23,8 @@ import { identitySource, readIdentity } from './identity.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
 
-const MARK_BEGIN = '# >>> eyesonly pre-commit >>>';
-const MARK_END = '# <<< eyesonly pre-commit <<<';
-export { MARK_BEGIN as HOOK_MARK };
+export const HOOK_MARK = '# >>> eyesonly pre-commit >>>';
+export const PRE_PUSH_MARK = '# >>> eyesonly pre-push >>>';
 
 const log = (msg) => console.error('[eyesonly] ' + msg);
 
@@ -70,19 +69,28 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-function eyesonlyBlock(command) {
-  return `${MARK_BEGIN}\n${command} pre-commit || exit 1\n${MARK_END}\n`;
-}
+const defaultCommand = () => `${q(process.execPath)} ${q(CLI)}`;
 
 /**
  * Install (or refresh) the eyesonly pre-commit hook, chaining any existing user hook.
  * `command` runs the CLI: `eyesonly` from PATH, or quoted node + script paths.
  */
-export function installPreCommitHook(cwd, command = `${q(process.execPath)} ${q(CLI)}`) {
-  const hook = path.resolve(cwd, gitStr(['rev-parse', '--git-path', 'hooks/pre-commit'], { cwd }));
+export function installPreCommitHook(cwd, command = defaultCommand()) {
+  installChainedHook(cwd, 'pre-commit', `${command} pre-commit`);
+}
+
+/** Repo mode: pre-push runs `eyesonly verify` on the commits about to leave. */
+export function installPrePushHook(cwd, command = defaultCommand()) {
+  installChainedHook(cwd, 'pre-push', `${command} pre-push "$@"`);
+}
+
+function installChainedHook(cwd, name, invocation) {
+  const MARK_BEGIN = `# >>> eyesonly ${name} >>>`;
+  const MARK_END = `# <<< eyesonly ${name} <<<`;
+  const hook = path.resolve(cwd, gitStr(['rev-parse', '--git-path', `hooks/${name}`], { cwd }));
   const dir = path.dirname(hook);
   fs.mkdirSync(dir, { recursive: true });
-  const block = eyesonlyBlock(command);
+  const block = `${MARK_BEGIN}\n${invocation} || exit 1\n${MARK_END}\n`;
 
   if (!fs.existsSync(hook)) {
     fs.writeFileSync(hook, '#!/bin/sh\n' + block, { mode: 0o755 });
@@ -98,18 +106,22 @@ export function installPreCommitHook(cwd, command = `${q(process.execPath)} ${q(
     return;
   }
 
-  // A user hook without our marker: keep it as pre-commit.local and chain it.
-  const local = path.join(dir, 'pre-commit.local');
+  // A user hook without our marker: keep it as <name>.local and chain it.
+  const local = path.join(dir, `${name}.local`);
   if (!fs.existsSync(local)) {
     fs.renameSync(hook, local);
-    log(`kept your existing pre-commit hook as ${local}; it still runs before eyesonly's check`);
+    log(`kept your existing ${name} hook as ${local}; it still runs before eyesonly's check`);
   } else {
-    let bak = path.join(dir, 'pre-commit.eyesonly-bak');
-    for (let n = 1; fs.existsSync(bak); n++) bak = path.join(dir, `pre-commit.eyesonly-bak.${n}`);
+    let bak = path.join(dir, `${name}.eyesonly-bak`);
+    for (let n = 1; fs.existsSync(bak); n++) bak = path.join(dir, `${name}.eyesonly-bak.${n}`);
     fs.renameSync(hook, bak);
-    log(`${local} already exists, so your current pre-commit hook was moved to ${bak}. Merge it into pre-commit.local to keep running it.`);
+    log(`${local} already exists, so your current ${name} hook was moved to ${bak}. Merge it into ${name}.local to keep running it.`);
   }
-  const chain = 'd=$(dirname "$0"); if [ -x "$d/pre-commit.local" ]; then "$d/pre-commit.local" "$@" || exit 1; fi\n';
+  let chain = `d=$(dirname "$0"); if [ -x "$d/${name}.local" ]; then "$d/${name}.local" "$@" || exit 1; fi\n`;
+  // pre-push gets the pushed refs on stdin: give the user's hook a copy, then restore stdin.
+  if (name === 'pre-push') {
+    chain = `d=$(dirname "$0"); in=$(cat)\nif [ -x "$d/${name}.local" ]; then printf '%s\\n' "$in" | "$d/${name}.local" "$@" || exit 1; fi\nexec 0<<EYESONLY_STDIN\n$in\nEYESONLY_STDIN\n`;
+  }
   fs.writeFileSync(hook, '#!/bin/sh\n' + chain + block, { mode: 0o755 });
   fs.chmodSync(hook, 0o755);
 }

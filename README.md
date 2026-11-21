@@ -62,17 +62,10 @@ Linux and macOS.
 ## Quickstart
 
 ```bash
-# --- server (behind TLS in production) ---
+# --- server, once (behind TLS in production; or `docker compose` in deploy/) ---
 export EYESONLY_DATA=/srv/eyesonly
-eyesonly-server user add "$(EYESONLY_HOME=~/.eyesonly eyesonly whoami | tail -1)"   # prints alice's token
-eyesonly-server repo create app.git --admin alice
-eyesonly-server policy set app.git - <<'EOF'
-{ "members": ["*"], "admins": ["alice"],
-  "groups":   { "core": ["alice", "bob"] },
-  "files":    { ".env": ["@core"], "secrets/**": ["@core"] },
-  "branches": { "refs/heads/private/": ["@core"] } }
-EOF
-eyesonly-server serve --port 8787
+eyesonly-server init --admin "$(eyesonly whoami | tail -1)" --repo app.git --url https://git.example.com
+eyesonly-server serve --port 8787   # init printed alice's token and the next commands
 
 # --- every developer, once ---
 eyesonly keygen alice            # prints a public card: send it to the admin, get a token back

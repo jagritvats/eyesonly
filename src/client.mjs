@@ -293,7 +293,10 @@ async function cmdClone([url, dir]) {
   saveResolved(resolved, path.join(dir, '.git'));
   configureFilters(dir);
   if (spawnSync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: dir }).status !== 0) {
-    return log(`cloned an empty repository into ${dir}. Add files, commit and push; protected paths are encrypted automatically.`);
+    // Protocol v0 can't advertise an unborn HEAD, so git falls back to init.defaultBranch
+    // (often master). eyesonly-server creates every repo on main: start there too.
+    git(['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: dir });
+    return log(`cloned an empty repository into ${dir} (branch main). Add files, commit and \`git push -u origin main\`; protected paths are encrypted automatically.`);
   }
   execFileSync('git', ['reset', '--quiet', '--hard', 'HEAD'], { cwd: dir, stdio: ['ignore', 'ignore', 'inherit'] });
   const files = protectedFiles(policy, dir);
@@ -333,6 +336,8 @@ function cmdClean([file]) {
     try {
       const env = vc.parse(blob);
       if (env.path !== file || !sameSet(Object.keys(env.keys), Object.keys(recipients))) continue;
+      // A recipient's key changed (set-key): re-wrap. `rekey` also re-seals pre-key-id envelopes.
+      if (vc.staleRecipients(env, recipients, { strict: process.env.EYESONLY_RESEAL === '1' }).length) continue;
       const signer = policy.keys?.[env.signer];
       if (!signer || !allowed.includes(env.signer) || !vc.verify(env, signer.ed25519)) continue;
       const prev = vc.open(env, id);
@@ -406,7 +411,9 @@ function cmdStatus() {
       const env = vc.parse(blob);
       const have = Object.keys(env.keys).sort();
       const want = Object.keys(recipientsFor(policy, allowed)).sort();
+      const stale = vc.staleRecipients(env, recipientsFor(policy, allowed));
       if (!sameSet(have, want)) note = `  needs rekey (encrypted for ${have.join(',')}; policy says ${want.join(',')})`;
+      else if (stale.length) note = `  needs rekey (new key for ${stale.join(',')})`;
     } else if (blob) note = '  WARNING: committed in plaintext';
     console.log(`  ${state.padEnd(9)} ${f}  [${allowed.join(', ')}]${note}`);
   }
@@ -424,7 +431,7 @@ function cmdRekey() {
   const files = mine.filter((f) => !skipped.includes(f));
   if (skipped.length) log(`can't rekey (not decrypted here): ${skipped.join(', ')}`);
   if (!files.length) return log('nothing to rekey');
-  git(['add', '--renormalize', '--', ...files], { cwd: top, stdio: ['ignore', 'inherit', 'inherit'] });
+  git(['add', '--renormalize', '--', ...files], { cwd: top, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, EYESONLY_RESEAL: '1' } });
   log(`re-encrypted ${files.length} file(s) for the current policy. Review with \`git status\` and commit.`);
 }
 

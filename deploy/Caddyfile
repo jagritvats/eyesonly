@@ -1,0 +1,14 @@
+# TLS for eyesonly-server. Caddy gets and renews the certificate for $EYESONLY_DOMAIN.
+#
+# Git needs streaming in both directions and no size cap. Caddy has no request body limit
+# by default and streams request bodies; the settings below also stream responses and
+# allow slow transfers of large repos.
+{$EYESONLY_DOMAIN} {
+	reverse_proxy eyesonly:8787 {
+		flush_interval -1
+		transport http {
+			read_timeout 1h
+			write_timeout 1h
+		}
+	}
+}

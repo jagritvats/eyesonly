@@ -152,8 +152,9 @@ function inspect(policy, p, blob, allowed) {
   } catch (e) {
     return { error: `cannot rekey '${p}': ${e.message}` };
   }
-  const want = Object.keys(recipientsFor(policy, allowed));
-  if (env.path === p && sameSet(Object.keys(env.keys), want)) return { ok: true };
+  const recipients = recipientsFor(policy, allowed);
+  const want = Object.keys(recipients);
+  if (env.path === p && sameSet(Object.keys(env.keys), want) && !vc.staleRecipients(env, recipients).length) return { ok: true };
   return { rekey: env };
 }
 

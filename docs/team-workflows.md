@@ -215,12 +215,49 @@ eyesonly pull-policy        # pins the current signer; compare the printed finge
 
 Set `EYESONLY_PIN_ADMIN=<fingerprint>` while doing this to refuse anything else.
 
-## Lost private key
+## Lost private key or new machine
 
-There's no key escrow. If a user loses `~/.eyesonly/identity.json`:
+There's no key escrow. A user who loses `~/.eyesonly/identity.json`, or wants a fresh key
+on a new laptop instead of copying the old file, gets a new key under the same name. Their
+token, group memberships and policy entries stay as they are.
 
-1. They run `eyesonly keygen <name>` again. Use a new name, or remove the old user first.
-2. You run `user remove <old>` and `user add <new card>`, then fix the policy.
-3. Someone else who can read each file rekeys for them.
+1. The user makes a new key with the **same name**:
 
-Files only the lost key could read can't be recovered.
+   ```bash
+   eyesonly keygen bob          # on the new machine; prints a new card
+   ```
+
+2. The admin swaps the key on the server:
+
+   ```bash
+   eyesonly-server user set-key eyesonlypub1:...
+   ```
+
+   It prints the old and new fingerprints and, per repo, what has to happen next.
+
+3. **Signed policy:** if the repo uses one, re-sign it. Clients keep the old keys until you
+   do (`policy manifest` -> `eyesonly policy-sign` -> `policy attest`, see
+   [policy-reference.md](policy-reference.md)). If the user is the signing admin, members
+   also re-pin once they've checked the new fingerprint with them (see above).
+
+4. **Re-wrap the files** for the new key. Someone who can read them and has them decrypted:
+
+   ```bash
+   eyesonly pull-policy && eyesonly rekey
+   git commit -am "rekey for bob's new key" && git push
+   ```
+
+   `eyesonly status` shows `needs rekey (new key for bob)` until this is done.
+
+5. The user clones on the new machine with their existing token (or runs `eyesonly setup`
+   in an existing clone).
+
+Things to know:
+
+- Files the user last wrote were signed with the old key. Clients refuse those until step 4
+  re-seals them, so do step 4 promptly.
+- Files only the lost key could read can't be recovered.
+- If the old key was lost or stolen, whoever has it can still read everything it could
+  decrypt before. Run `eyesonly audit <name>` and rotate what it lists.
+- To give one person several machines, copy `identity.json` to each (mode 0600). One key
+  per user is all the server tracks today.

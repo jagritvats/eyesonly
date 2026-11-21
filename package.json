@@ -8,7 +8,7 @@
   "engines": { "node": ">=20" },
   "files": ["bin", "src", "site"],
   "scripts": {
-    "test": "bash test/e2e.sh",
+    "test": "bash test/run-all.sh",
     "serve": "node bin/veil-server.mjs serve"
   }
 }

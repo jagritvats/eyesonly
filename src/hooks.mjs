@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
+import { commonGitDir, checkResolvedFilters } from './attrs.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'veil.mjs');
 const VEIL_HOME = () => process.env.VEIL_HOME || path.join(os.homedir(), '.veil');
@@ -41,7 +42,7 @@ function tryGitStr(args) {
   }
 }
 
-const gitDir = () => gitStr(['rev-parse', '--absolute-git-dir']);
+const gitDir = () => commonGitDir(); // shared by every git worktree
 
 function loadPolicy() {
   const p = path.join(gitDir(), 'veil', 'policy.json');
@@ -182,6 +183,16 @@ export function cmdPreCommit() {
   const diff = gitStr(['diff', '--cached', '-z', '--name-status', '--no-ext-diff', '-M100%', '--diff-filter=ACMR', base]);
   const entries = parseNameStatus(diff);
   const errors = [];
+
+  // A .gitattributes line can send a protected path to another filter (e.g. git-lfs, which
+  // uploads plaintext from its pre-push hook). Check what git really resolves.
+  const attrsStaged = entries.some((e) => path.posix.basename(e.dst) === '.gitattributes');
+  const probe = attrsStaged
+    ? gitStr(['ls-files', '-z']).split('\0').filter((p) => p && fileRule(policy, p))
+    : [...new Set(entries.map((e) => e.dst).filter((p) => fileRule(policy, p)))];
+  for (const r of checkResolvedFilters(probe)) {
+    errors.push(`'${r.path}' resolves to filter=${r.value} (from .gitattributes); veil requires filter=veil. Run \`veil setup\` and remove the override.`);
+  }
 
   for (const e of entries) {
     if ((e.status === 'R' || e.status === 'C') && fileRule(policy, e.src) && !fileRule(policy, e.dst)) {

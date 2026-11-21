@@ -23,9 +23,6 @@ import { identitySource, readIdentity } from './identity.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
 
-const MARK_BEGIN = '# >>> eyesonly pre-commit >>>';
-const MARK_END = '# <<< eyesonly pre-commit <<<';
-
 const log = (msg) => console.error('[eyesonly] ' + msg);
 
 function git(args, opts = {}) {
@@ -69,16 +66,23 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-function eyesonlyBlock() {
-  return `${MARK_BEGIN}\n${q(process.execPath)} ${q(CLI)} pre-commit || exit 1\n${MARK_END}\n`;
-}
-
 /** Install (or refresh) the eyesonly pre-commit hook, chaining any existing user hook. */
 export function installPreCommitHook(cwd) {
-  const hook = path.resolve(cwd, gitStr(['rev-parse', '--git-path', 'hooks/pre-commit'], { cwd }));
+  installChainedHook(cwd, 'pre-commit', 'pre-commit');
+}
+
+/** Repo mode: pre-push runs `eyesonly verify` on the commits about to leave. */
+export function installPrePushHook(cwd) {
+  installChainedHook(cwd, 'pre-push', 'pre-push "$@"');
+}
+
+function installChainedHook(cwd, name, invocation) {
+  const MARK_BEGIN = `# >>> eyesonly ${name} >>>`;
+  const MARK_END = `# <<< eyesonly ${name} <<<`;
+  const hook = path.resolve(cwd, gitStr(['rev-parse', '--git-path', `hooks/${name}`], { cwd }));
   const dir = path.dirname(hook);
   fs.mkdirSync(dir, { recursive: true });
-  const block = eyesonlyBlock();
+  const block = `${MARK_BEGIN}\n${q(process.execPath)} ${q(CLI)} ${invocation} || exit 1\n${MARK_END}\n`;
 
   if (!fs.existsSync(hook)) {
     fs.writeFileSync(hook, '#!/bin/sh\n' + block, { mode: 0o755 });
@@ -94,18 +98,22 @@ export function installPreCommitHook(cwd) {
     return;
   }
 
-  // A user hook without our marker: keep it as pre-commit.local and chain it.
-  const local = path.join(dir, 'pre-commit.local');
+  // A user hook without our marker: keep it as <name>.local and chain it.
+  const local = path.join(dir, `${name}.local`);
   if (!fs.existsSync(local)) {
     fs.renameSync(hook, local);
-    log(`kept your existing pre-commit hook as ${local}; it still runs before eyesonly's check`);
+    log(`kept your existing ${name} hook as ${local}; it still runs before eyesonly's check`);
   } else {
-    let bak = path.join(dir, 'pre-commit.eyesonly-bak');
-    for (let n = 1; fs.existsSync(bak); n++) bak = path.join(dir, `pre-commit.eyesonly-bak.${n}`);
+    let bak = path.join(dir, `${name}.eyesonly-bak`);
+    for (let n = 1; fs.existsSync(bak); n++) bak = path.join(dir, `${name}.eyesonly-bak.${n}`);
     fs.renameSync(hook, bak);
-    log(`${local} already exists, so your current pre-commit hook was moved to ${bak}. Merge it into pre-commit.local to keep running it.`);
+    log(`${local} already exists, so your current ${name} hook was moved to ${bak}. Merge it into ${name}.local to keep running it.`);
   }
-  const chain = 'd=$(dirname "$0"); if [ -x "$d/pre-commit.local" ]; then "$d/pre-commit.local" "$@" || exit 1; fi\n';
+  let chain = `d=$(dirname "$0"); if [ -x "$d/${name}.local" ]; then "$d/${name}.local" "$@" || exit 1; fi\n`;
+  // pre-push gets the pushed refs on stdin: give the user's hook a copy, then restore stdin.
+  if (name === 'pre-push') {
+    chain = `d=$(dirname "$0"); in=$(cat)\nif [ -x "$d/${name}.local" ]; then printf '%s\\n' "$in" | "$d/${name}.local" "$@" || exit 1; fi\nexec 0<<EYESONLY_STDIN\n$in\nEYESONLY_STDIN\n`;
+  }
   fs.writeFileSync(hook, '#!/bin/sh\n' + chain + block, { mode: 0o755 });
   fs.chmodSync(hook, 0o755);
 }

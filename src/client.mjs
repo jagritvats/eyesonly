@@ -69,7 +69,7 @@ function cmdWhoami() {
 // ------------------------------------------------------------------ policy
 
 // Eyes Only state lives in the common git dir, shared by every `git worktree`.
-function gitDir() {
+export function gitDir() {
   const { gitDir: own, common } = attrs.gitDirs();
   if (own !== common) migrateWorktreeState(own, common);
   return common;
@@ -165,13 +165,13 @@ async function loadResolved(remoteUrl, gitDirOrNull) {
   return r;
 }
 
-function saveResolved({ policy, trust }, dir) {
+export function saveResolved({ policy, trust }, dir) {
   writePolicy(policy, dir);
   if (trust) attest.saveTrust(dir || gitDir(), trust);
   attrs.pinAttributes(pinnedLines(policy), dir || gitDir()); // clone, setup and pull-policy all pin
 }
 
-function configureFilters(cwd) {
+export function configureFilters(cwd) {
   const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
   const base = `${q(process.execPath)} ${q(CLI)}`;
   const set = (k, v) => git(['config', '--local', k, v], { cwd });
@@ -196,7 +196,7 @@ function attributeLines(policy) {
 // .gitattributes stay the same for everyone.
 const pinnedLines = (policy) => attributeLines(policy).map((l) => `${l} -text`);
 
-function ensureAttributes(policy, cwd) {
+export function ensureAttributes(policy, cwd) {
   attrs.pinAttributes(pinnedLines(policy), attrs.commonGitDir(cwd)); // wins over any in-tree .gitattributes
   const p = path.join(cwd, '.gitattributes');
   const existing = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
@@ -220,7 +220,7 @@ function ensureAttributes(policy, cwd) {
   return true;
 }
 
-function protectedFiles(policy, cwd) {
+export function protectedFiles(policy, cwd) {
   // `-t` tags skip-worktree entries 'S': a sparse checkout must not materialize excluded secrets.
   const out = gitStr(['ls-files', '-t', '-z'], { cwd });
   return out
@@ -238,7 +238,7 @@ function originUrl(cwd) {
   }
 }
 
-function repoTop() {
+export function repoTop() {
   try {
     return gitStr(['rev-parse', '--show-toplevel']);
   } catch {
@@ -246,19 +246,11 @@ function repoTop() {
   }
 }
 
-async function cmdSetup() {
-  const top = repoTop();
-  const remote = originUrl(top);
-  const resolved = await loadResolved(remote, gitDir());
-  const { policy } = resolved;
-  const id = loadIdentity({ required: false });
-  if (id && policy.user !== id.name) log(`warning: server says you are '${policy.user}' but your identity is '${id.name}'`);
-  saveResolved(resolved);
-  configureFilters(top);
-  ensureAttributes(policy, top);
+/** Re-smudge protected files that are still envelopes, so readers get plaintext. */
+export function resmudge(policy, top) {
   const files = protectedFiles(policy, top);
-  // Re-smudge. `checkout-index -f` skips files whose stat matches the index (a freshly
-  // pulled envelope), so remove working copies that are still envelopes first. Plaintext
+  // `checkout-index -f` skips files whose stat matches the index (a freshly pulled
+  // envelope), so remove working copies that are still envelopes first. Plaintext
   // working copies are left alone: they're already decrypted or hold local edits.
   const sealed = files.filter((f) => {
     try {
@@ -269,17 +261,46 @@ async function cmdSetup() {
   });
   for (const f of sealed) fs.rmSync(path.join(top, f), { force: true });
   if (sealed.length) git(['checkout-index', '-f', '-u', '--', ...sealed], { cwd: top }); // -u: refresh index stat
+  return files;
+}
+
+const modeArg = (args) => {
+  const i = args.indexOf('--mode');
+  return i === -1 ? null : args[i + 1] || die('usage: --mode repo|server');
+};
+const repoMode = () => import('./repo-mode.mjs');
+
+async function cmdSetup(args = []) {
+  const top = repoTop();
+  const rm = await repoMode();
+  if ((await rm.detectMode(top, { explicit: modeArg(args) })) === 'repo') return rm.setupRepo(top);
+  const remote = originUrl(top);
+  const resolved = await loadResolved(remote, gitDir());
+  const { policy } = resolved;
+  const id = loadIdentity({ required: false });
+  if (id && policy.user !== id.name) log(`warning: server says you are '${policy.user}' but your identity is '${id.name}'`);
+  saveResolved(resolved);
+  configureFilters(top);
+  git(['config', '--local', 'eyesonly.mode', 'server'], { cwd: top });
+  ensureAttributes(policy, top);
+  const files = resmudge(policy, top);
   log(`ready. ${files.length} protected file(s) in this checkout.`);
 }
 
-async function cmdPullPolicy() {
-  const remote = originUrl(repoTop());
+async function cmdPullPolicy(args = []) {
+  const top = repoTop();
+  const rm = await repoMode();
+  if ((await rm.detectMode(top, { explicit: modeArg(args) })) === 'repo') return rm.pullRepoPolicy(top);
+  const remote = originUrl(top);
   saveResolved(await loadResolved(remote, gitDir()));
   log('policy updated. Run `eyesonly rekey` if file access changed.');
 }
 
 async function cmdClone([url, dir]) {
   if (!url) die('usage: eyesonly clone <url> [dir]');
+  // No Eyes Only server behind the URL: a plain git host with the policy in the repo.
+  const rm = await repoMode();
+  if (!(await rm.probeServer(url)) && (await rm.cloneRepo(url, dir, { fallback: /^https?:\/\//.test(url) }))) return;
   const resolved = await loadResolved(url, null); // before cloning: a bad policy leaves nothing behind
   const { policy } = resolved;
   const id = loadIdentity({ required: false });
@@ -289,6 +310,7 @@ async function cmdClone([url, dir]) {
   execFileSync('git', ['clone', '--quiet', '--no-checkout', url, dir], { stdio: 'inherit' });
   saveResolved(resolved, path.join(dir, '.git'));
   configureFilters(dir);
+  git(['config', '--local', 'eyesonly.mode', 'server'], { cwd: dir });
   if (spawnSync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: dir }).status !== 0) {
     // Protocol v0 can't advertise an unborn HEAD, so git falls back to init.defaultBranch
     // (often master). eyesonly-server creates every repo on main: start there too.
@@ -393,11 +415,12 @@ function cmdTextconv([file]) {
 
 // ------------------------------------------------------------ team commands
 
-function cmdStatus() {
+async function cmdStatus() {
   const policy = loadPolicy();
   const id = loadIdentity({ required: false });
   const top = gitStr(['rev-parse', '--show-toplevel']);
-  console.log(`repo ${policy.repo} as ${policy.user}${id ? '' : ' (no local identity!)'}`);
+  console.log(`repo ${policy.repo} as ${policy.user ?? id?.name ?? '(no identity)'}${id ? '' : ' (no local identity!)'}${policy.mode === 'repo' ? `  [repo mode, policy v${policy.version}]` : ''}`);
+  if (policy.mode === 'repo') await (await repoMode()).warnIfPolicyBehind(policy, top);
   for (const f of protectedFiles(policy, top)) {
     const allowed = fileRule(policy, f);
     const work = fs.existsSync(path.join(top, f)) ? fs.readFileSync(path.join(top, f)) : null;
@@ -459,7 +482,7 @@ function cmdAudit([user]) {
 }
 
 // The demo is a bash script so it reads like the commands a user would type.
-/** On Windows, plain `bash` may resolve to WSL's System32ash.exe; prefer Git for Windows' bash. */
+/** On Windows, plain `bash` may resolve to WSL's System32\bash.exe; prefer Git for Windows' bash. */
 function findBash() {
   if (process.platform !== 'win32') return 'bash';
   try {
@@ -485,8 +508,9 @@ const USAGE = `eyesonly: per-user access control for git
   eyesonly keygen <name>       create your identity (~/.eyesonly/identity.json)
   eyesonly whoami              print your public card
   eyesonly clone <url> [dir]   clone an eyesonly repo and decrypt what you're allowed to read
-  eyesonly setup               enable eyesonly in an existing clone
-  eyesonly pull-policy         refresh the cached access policy from the server
+  eyesonly setup [--mode repo|server]
+                               enable eyesonly in an existing clone (mode is detected)
+  eyesonly pull-policy         refresh the cached access policy (server, or the repo's default branch)
   eyesonly policy-sign <file>  (admin) sign a policy manifest from eyesonly-server policy manifest
   eyesonly status              list protected files and whether you can read them
   eyesonly rekey               re-encrypt your readable files for the current policy
@@ -496,9 +520,19 @@ const USAGE = `eyesonly: per-user access control for git
   eyesonly env [--file <path>]... [--format dotenv|json|shell]
                                print those variables (writes secrets to stdout)
 
+repo mode (no server; the signed policy lives in .eyesonly/policy.json):
+  eyesonly init [--files .env,secrets/**] [--group core] [--commit]
+                               (admin) start using eyesonly in this repo
+  eyesonly join                write your public card to .eyesonly/requests/ for an admin to grant
+  eyesonly grant <name> [--card <card> | --from-request] [--group <g>] [--files <glob>] [--admin]
+  eyesonly revoke <name> [--group <g>]
+  eyesonly policy show         rules, members, admins and their fingerprints
+  eyesonly verify [<base> [<head>]] | --range <a>..<b>
+                               check commits like the server would (CI and the pre-push hook)
+
 identity: EYESONLY_IDENTITY (JSON or base64 of it), else $EYESONLY_HOME/identity.json
 
-internal (wired up by setup): clean %f | smudge %f | textconv <file> | pre-commit | merge-file`;
+internal (wired up by setup): clean %f | smudge %f | textconv <file> | pre-commit | pre-push | merge-file`;
 
 export async function main(argv) {
   const [cmd, ...rest] = argv;
@@ -524,6 +558,13 @@ export async function main(argv) {
     'merge-file': (a) => import('./merge.mjs').then((m) => m.cmdMergeFile(a)),
     run: (a) => import('./run.mjs').then((m) => m.cmdRun(a)),
     env: (a) => import('./run.mjs').then((m) => m.cmdEnv(a)),
+    init: (a) => repoMode().then((m) => m.cmdInit(a)),
+    join: (a) => repoMode().then((m) => m.cmdJoin(a)),
+    grant: (a) => repoMode().then((m) => m.cmdGrant(a)),
+    revoke: (a) => repoMode().then((m) => m.cmdRevoke(a)),
+    policy: (a) => repoMode().then((m) => m.cmdPolicy(a)),
+    verify: (a) => import('./verify.mjs').then((m) => m.cmdVerify(a)),
+    'pre-push': (a) => import('./verify.mjs').then((m) => m.cmdPrePush(a)),
   };
   if (!table[cmd]) {
     console.error(USAGE);

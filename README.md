@@ -42,7 +42,7 @@ junior can't list, fetch (even by SHA over protocol v2) or push to `private/*`; 
 plaintext push is rejected by the server; and alice's accidental merge of private history
 into `main` is rejected while a squash merge goes through.
 
-Proof beyond the demo: `npm test` runs 450 adversarial end-to-end checks (9 suites) against
+Proof beyond the demo: `npm test` runs 507 adversarial end-to-end checks (10 suites) against
 a real server, with an attacker who controls their own git client.
 
 ## Install
@@ -101,6 +101,8 @@ just works: the pre-commit hook installed by `eyesonly setup` re-seals it for it
 | Command | What it does |
 |---|---|
 | `eyesonly status` | Protected files, who can read them, and whether they need a rekey |
+| `eyesonly doctor` | Checks identity, remote, token storage, filters, hook and policy freshness; prints a fix for each problem |
+| `eyesonly setup --remote <name>` | Use a remote other than `origin` for the Eyes Only server (remembered), e.g. to keep GitHub as `origin` |
 | `eyesonly pull-policy && eyesonly rekey` | After the admin changes access: re-encrypt for the new audience |
 | `eyesonly audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
 | `eyesonly run -- <cmd>` | Run a command with your protected `.env` files as environment variables, decrypted from the committed blobs (`--file .env.production` to pick one; `eyesonly env` prints them) |
@@ -213,7 +215,8 @@ eyesonly-server mirror show app.git        # config (credential path only) + wha
 1. **Client filter** (`clean`/`smudge`): protected paths are sealed with AES-256-GCM.
    The key is wrapped per reader with X25519, the envelope is signed with Ed25519, and the
    path is bound into the AAD. Unchanged plaintext reuses the existing ciphertext, so
-   there's no diff noise.
+   there's no diff noise. git runs it as one long-running filter process per command
+   (protocol v2, `clean` and `smudge` only, never `delay`), not one process per file.
 2. **Proxy** (`eyesonly-server serve`): authenticates tokens, hides refs per user, forces
    protocol v0 (v2 allows fetching hidden commits by SHA, as the test suite shows), and
    serves no dumb HTTP. It also filters fetch negotiation: `have`/`shallow` lines for
@@ -274,10 +277,11 @@ src/attest.mjs                      signed policy manifests + admin key pinning
 src/negotiate.mjs                   upload-pack negotiation filter
 src/hooks.mjs                       client pre-commit hook
 src/policy.mjs                      glob / ref / group matching
-src/client.mjs                      filters + developer commands
+src/client.mjs                      filters + developer commands (doctor, --remote)
 src/identity.mjs                    where the identity comes from (EYESONLY_IDENTITY or file)
 src/run.mjs                         eyesonly run / env (dotenv files into a process env)
 action.yml, action/setup.sh         GitHub Action: clone + decrypt in CI
+src/filterproc.mjs                  long-running filter process (git protocol v2)
 src/merge.mjs                       merge driver for protected files
 src/refguard.mjs                    protected refs, read-only members, rewind check
 src/attrs.mjs                       info/attributes pinning, server filter-redirect check

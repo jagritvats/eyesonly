@@ -23,6 +23,9 @@ import { identitySource, readIdentity } from './identity.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
 
+export const HOOK_MARK = '# >>> eyesonly pre-commit >>>';
+export const PRE_PUSH_MARK = '# >>> eyesonly pre-push >>>';
+
 const log = (msg) => console.error('[eyesonly] ' + msg);
 
 function git(args, opts = {}) {
@@ -66,14 +69,19 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-/** Install (or refresh) the eyesonly pre-commit hook, chaining any existing user hook. */
-export function installPreCommitHook(cwd) {
-  installChainedHook(cwd, 'pre-commit', 'pre-commit');
+const defaultCommand = () => `${q(process.execPath)} ${q(CLI)}`;
+
+/**
+ * Install (or refresh) the eyesonly pre-commit hook, chaining any existing user hook.
+ * `command` runs the CLI: `eyesonly` from PATH, or quoted node + script paths.
+ */
+export function installPreCommitHook(cwd, command = defaultCommand()) {
+  installChainedHook(cwd, 'pre-commit', `${command} pre-commit`);
 }
 
 /** Repo mode: pre-push runs `eyesonly verify` on the commits about to leave. */
-export function installPrePushHook(cwd) {
-  installChainedHook(cwd, 'pre-push', 'pre-push "$@"');
+export function installPrePushHook(cwd, command = defaultCommand()) {
+  installChainedHook(cwd, 'pre-push', `${command} pre-push "$@"`);
 }
 
 function installChainedHook(cwd, name, invocation) {
@@ -82,7 +90,7 @@ function installChainedHook(cwd, name, invocation) {
   const hook = path.resolve(cwd, gitStr(['rev-parse', '--git-path', `hooks/${name}`], { cwd }));
   const dir = path.dirname(hook);
   fs.mkdirSync(dir, { recursive: true });
-  const block = `${MARK_BEGIN}\n${q(process.execPath)} ${q(CLI)} ${invocation} || exit 1\n${MARK_END}\n`;
+  const block = `${MARK_BEGIN}\n${invocation} || exit 1\n${MARK_END}\n`;
 
   if (!fs.existsSync(hook)) {
     fs.writeFileSync(hook, '#!/bin/sh\n' + block, { mode: 0o755 });

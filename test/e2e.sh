@@ -82,7 +82,7 @@ cd "$SB/junior" && as junior git pull -q >/dev/null 2>&1
 expect_fail "junior can't stage an edit to .env (client refuses)" as junior bash -c 'echo X=1 > .env && git add .env'
 as junior git checkout -q -- .env 2>/dev/null; as junior git reset -q --hard
 echo 'DB_PASS=leaked' > .env
-NOF="-c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat"   # attacker disables the client filter
+NOF="-c filter.eyesonly.process= -c filter.eyesonly.required=false -c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat"   # attacker disables the client filter
 as junior git $NOF add .env && as junior git $NOF commit -q --no-verify -m "pushed the .env too" >/dev/null
 expect_reject "plaintext .env push (filters bypassed) is rejected" "may not modify protected file '.env'" as junior git push -q
 git reset -q --hard origin/main
@@ -96,7 +96,7 @@ const r = {}; for (const u of pol.files[".env"]) r[u] = pol.keys[u].x25519;
 r.junior = id.x25519.pub;
 fs.writeFileSync(".env", vc.seal({ plaintext: Buffer.from("API_URL=https://evil\n"), path: ".env", recipients: r, signer: id }));
 ' "$ROOT" "$SB/home/junior"
-as junior git add .env && as junior git commit -q --no-verify -m forge >/dev/null
+as junior git $NOF add .env && as junior git commit -q --no-verify -m forge >/dev/null   # the client filter would refuse it; the attacker skips it
 expect_reject "forged envelope signed by junior is rejected" "may not modify" as junior git push -q
 git reset -q --hard origin/main
 OLD=$(git rev-list --max-parents=0 HEAD)

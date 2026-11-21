@@ -37,11 +37,15 @@ const tryGit = (args, cwd) => {
 
 // ------------------------------------------------------------------ location
 
-/** The default branch to read the policy from: origin/HEAD, then origin/main|master, then main|master. */
-export function defaultRef(cwd) {
-  const head = tryGit(['symbolic-ref', '-q', 'refs/remotes/origin/HEAD'], cwd);
+/**
+ * The default branch to read the policy from: <remote>/HEAD, then <remote>/main|master, then
+ * local main|master. <remote> is `remote`, else `git config eyesonly.remote`, else origin.
+ */
+export function defaultRef(cwd, remote) {
+  const r0 = remote || tryGit(['config', 'eyesonly.remote'], cwd) || 'origin';
+  const head = tryGit(['symbolic-ref', '-q', `refs/remotes/${r0}/HEAD`], cwd);
   if (head) return head;
-  for (const r of ['refs/remotes/origin/main', 'refs/remotes/origin/master', 'refs/heads/main', 'refs/heads/master']) {
+  for (const r of [`refs/remotes/${r0}/main`, `refs/remotes/${r0}/master`, 'refs/heads/main', 'refs/heads/master']) {
     if (tryGit(['rev-parse', '--verify', '-q', r], cwd)) return r;
   }
   return null;

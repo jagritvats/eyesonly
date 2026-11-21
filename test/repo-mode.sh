@@ -29,6 +29,8 @@ host_blob() { git --git-dir="$SB/host.git" cat-file blob "$1"; }
 js() { local s="$1"; shift; node --input-type=module -e "$s" "$ROOT_URL" "$@"; }
 card() { as "$1" $EYESONLY whoami 2>/dev/null | tail -1; }
 HOST="$SB/host.git"
+# An attacker without the client: every eyesonly filter off.
+NOF="-c filter.eyesonly.process= -c filter.eyesonly.required=false -c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat"
 FILE_URL="$(node -e 'console.log(require("node:url").pathToFileURL(process.argv[1]).href)' "$(cd "$SB" && (pwd -W 2>/dev/null || pwd))/host.git")"
 
 # seal <who-signs> <path> <plaintext> <recipient...>: write a valid envelope signed by <who-signs>
@@ -130,20 +132,20 @@ expect_reject "verify rejects an envelope from an unknown key" "signer 'mallory'
 cd "$SB/bob"
 as bob git checkout -q -b moved
 mkdir -p secrets && git cat-file blob HEAD:.env > secrets/copy.txt
-as bob git -c filter.eyesonly.clean=cat add secrets/copy.txt && as bob git commit -q --no-verify -m moved 2>/dev/null
+as bob git $NOF add secrets/copy.txt && as bob git commit -q --no-verify -m moved 2>/dev/null
 expect_reject "verify rejects an envelope moved to another path" "is encrypted for path '.env'" $EYESONLY verify --range main..moved
 as bob git checkout -q main
 
 echo "== plaintext pushes"
 as bob git checkout -q -b leak
 echo 'STRIPE_SECRET=sk_live_PLAINTEXT' > .env
-as bob git -c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat add .env
-as bob git -c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat commit -q --no-verify -m leak
+as bob git $NOF add .env
+as bob git $NOF commit -q --no-verify -m leak
 expect_reject "the pre-push hook blocks plaintext" "is NOT encrypted" as bob git push -q origin leak
 expect_fail "...so the host never got it" git --git-dir="$HOST" rev-parse -q --verify refs/heads/leak
 expect_reject "verify (CI) rejects plaintext pushed by someone without the client" "is NOT encrypted" $EYESONLY verify --range main..leak
 expect_reject "verify also catches it with default range" "is NOT encrypted" $EYESONLY verify
-as bob git -c filter.eyesonly.smudge=cat checkout -q -f main
+as bob git $NOF checkout -q -f main
 as bob git branch -q -D leak
 
 echo "== policy tampering"

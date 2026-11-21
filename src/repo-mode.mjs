@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import * as attest from './attest.mjs';
 import * as vc from './crypto.mjs';
 import * as rp from './repo-policy.mjs';
-import { installPrePushHook } from './hooks.mjs';
+import { installPrePushHook, PRE_PUSH_MARK } from './hooks.mjs';
 import { configureFilters, ensureAttributes, gitDir, loadIdentity, protectedFiles, repoTop, resmudge, saveResolved } from './client.mjs';
 
 const log = (...a) => console.error('[eyesonly]', ...a);
@@ -58,15 +58,16 @@ export async function probeServer(url) {
  * commit a policy file signed by themselves and flip new clones into repo mode.
  * A clone never switches modes silently.
  */
-export async function detectMode(top, { explicit } = {}) {
+export async function detectMode(top, { explicit, remote = {} } = {}) {
   if (explicit && explicit !== 'repo' && explicit !== 'server') die('usage: --mode repo|server');
-  const remote = tryGit(['config', 'remote.origin.url'], { cwd: top });
+  const name = remote.name || 'origin';
+  const url = remote.url !== undefined ? remote.url : tryGit(['config', `remote.${name}.url`], { cwd: top });
   let mode = explicit;
   if (!mode) {
-    if (await probeServer(remote)) mode = 'server';
-    else if (rp.policyTextAt(rp.defaultRef(top), top) != null) mode = 'repo';
-    else if (isHttp(remote)) mode = 'server'; // unreachable server: keep its error messages
-    else die(`no Eyes Only policy found: origin is not an Eyes Only server and the default branch has no ${rp.POLICY_FILE}. An admin starts with \`eyesonly init\` (no server needed) or \`eyesonly-server init\`.`);
+    if (await probeServer(url)) mode = 'server';
+    else if (rp.policyTextAt(rp.defaultRef(top, name), top) != null) mode = 'repo';
+    else if (isHttp(url)) mode = 'server'; // unreachable server: keep its error messages
+    else die(`no Eyes Only policy found: remote '${name}' is not an Eyes Only server and the default branch has no ${rp.POLICY_FILE}. An admin starts with \`eyesonly init\` (no server needed) or \`eyesonly-server init\`.`);
   }
   const cached = tryGit(['config', '--local', 'eyesonly.mode'], { cwd: top });
   if (cached && cached !== mode && !explicit) {
@@ -78,8 +79,8 @@ export async function detectMode(top, { explicit } = {}) {
 // ------------------------------------------------------------------ resolve
 
 /** Read, verify and trust-check the policy on the default branch of the repo at `top`. */
-function resolveAt(top, gd) {
-  const ref = rp.defaultRef(top);
+function resolveAt(top, gd, remote) {
+  const ref = rp.defaultRef(top, remote);
   const text = rp.policyTextAt(ref, top);
   if (text == null) die(`no ${rp.POLICY_FILE} on the default branch${ref ? ` (${ref.replace(/^refs\/(remotes\/|heads\/)/, '')})` : ''}. Pull first, or ask an admin to run \`eyesonly init\`.`);
   try {
@@ -102,27 +103,60 @@ function apply(top, { manifest, trust, notes }, id, { dir } = {}) {
   memberNotes(manifest, id);
   const policy = rp.cachePolicy(manifest, id?.name ?? null);
   saveResolved({ policy, trust }, dir);
-  configureFilters(top);
-  installPrePushHook(top);
+  installPrePushHook(top, configureFilters(top));
   git(['config', '--local', 'eyesonly.mode', 'repo'], { cwd: top });
   return policy;
 }
 
-export function setupRepo(top) {
-  const resolved = resolveAt(top, gitDir());
+export function setupRepo(top, remote) {
+  const resolved = resolveAt(top, gitDir(), remote);
   const policy = apply(top, resolved, loadIdentity({ required: false }));
   ensureAttributes(policy, top);
   const files = resmudge(policy, top);
   log(`ready (repo mode, policy v${resolved.manifest.version}). ${files.length} protected file(s) in this checkout.`);
 }
 
-export function pullRepoPolicy(top) {
-  if (tryGit(['config', 'remote.origin.url'], { cwd: top }) && tryGit(['fetch', '--quiet', 'origin'], { cwd: top }) === null) {
-    log("warning: couldn't fetch origin; using the policy already on the local default branch");
+export function pullRepoPolicy(top, remote = 'origin') {
+  if (tryGit(['config', `remote.${remote}.url`], { cwd: top }) && tryGit(['fetch', '--quiet', remote], { cwd: top }) === null) {
+    log(`warning: couldn't fetch ${remote}; using the policy already on the local default branch`);
   }
-  const resolved = resolveAt(top, gitDir());
+  const resolved = resolveAt(top, gitDir(), remote);
   apply(top, resolved, loadIdentity({ required: false }));
   log(`policy v${resolved.manifest.version} from the default branch. Run \`eyesonly rekey\` if file access changed.`);
+}
+
+/** `eyesonly doctor` checks for a repo-mode clone. */
+export function doctorRepo(top, { ok, warn, fail, id, remote }) {
+  const ref = rp.defaultRef(top, remote);
+  const text = rp.policyTextAt(ref, top);
+  if (text == null) return fail(`no ${rp.POLICY_FILE} on the default branch${ref ? ` (${ref})` : ''}`, `git pull, or ask an admin to run eyesonly init`);
+  let r;
+  try {
+    r = rp.resolveRepoPolicy(rp.parseAttestation(text), { trust: attest.loadTrust(gitDir()), pin: process.env.EYESONLY_PIN_ADMIN });
+  } catch (e) {
+    return fail(`the repo's policy is refused: ${e.message}`, 'ask your admin; if the admin set really changed, delete .git/eyesonly/trust.json and run eyesonly setup');
+  }
+  const m = r.manifest;
+  ok(`repo mode: policy v${m.version} on ${ref.replace(/^refs\/(remotes\/|heads\/)/, '')}, signed by admin ${rp.rulesOf(m).admins.join(', ')}, matches the pinned admin keys`);
+  const trust = attest.loadTrust(gitDir());
+  if (!trust) warn('no admin key pinned yet', 'eyesonly setup');
+  const cached = (() => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(gitDir(), 'eyesonly', 'policy.json'), 'utf8'));
+    } catch {
+      return null;
+    }
+  })();
+  if (cached && (cached.version || 0) < m.version) fail(`this clone uses policy v${cached.version || '?'}, the default branch has v${m.version}`, 'eyesonly pull-policy && eyesonly rekey');
+  if (id) {
+    const k = m.keys[id.name];
+    if (!k) warn(`you ('${id.name}') aren't in the policy yet`, 'eyesonly join, then ask an admin to run eyesonly grant');
+    else if (k.ed25519 !== id.ed25519.pub || k.x25519 !== id.x25519.pub) fail(`the policy has a different key for '${id.name}' than your identity`, 'ask an admin to re-grant you with your current card (eyesonly whoami)');
+    else ok(`you ('${id.name}') are a member`);
+  }
+  const hook = path.resolve(top, git(['rev-parse', '--git-path', 'hooks/pre-push'], { cwd: top }));
+  if (fs.existsSync(hook) && fs.readFileSync(hook, 'utf8').includes(PRE_PUSH_MARK)) ok('pre-push hook installed (runs eyesonly verify)');
+  else fail('the eyesonly pre-push hook is missing', 'eyesonly setup');
 }
 
 /** A cheap hint for `eyesonly status`: the default branch has a newer policy than this clone uses. */

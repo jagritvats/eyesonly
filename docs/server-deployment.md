@@ -1,6 +1,8 @@
 # Server deployment
 
 For whoever runs `eyesonly-server` for a team: install, TLS, systemd, backups and upgrades.
+[GitHub mode](github-mode.md) needs none of this; see [choosing a mode](choosing-a-mode.md)
+for what the server adds.
 
 The server is one Node process. It authenticates users, hides refs per user, and runs the
 pre-receive hook that enforces the policy. It has no database. All state lives in one

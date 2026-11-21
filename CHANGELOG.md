@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Docs and website lead with GitHub mode (repo mode, no server) and present the server as the upgrade: new guides `docs/github-mode.md` and `docs/choosing-a-mode.md` (including moving from GitHub mode to the server), and both modes covered in existing-repos, CI, team workflows, troubleshooting and the policy reference.
 - Repo mode: Eyes Only without a server. The admin-signed policy lives in `.eyesonly/policy.json` and is read from the default branch only (version-monotonic, admin keys pinned on first use); any git host works. Same commands as server mode; `setup`, `clone` and `pull-policy` detect the mode (an Eyes Only server behind the remote always wins), and a clone never switches modes silently (`--mode` to switch). New: `eyesonly init`, `join`, `grant`, `revoke`, `policy show`. See docs/repo-mode.md.
 - `eyesonly verify` runs the server's content checks over a commit range against the policy in the repo (plus: policy changes must be signed by an earlier admin with a higher version). A pre-push hook runs it in repo-mode clones, and the GitHub Action has `mode: verify` for a required status check (no secrets).
 - The server's pre-receive content checks moved to `src/validate.mjs`, shared with `verify`; behavior unchanged.

@@ -35,9 +35,10 @@ for u in alice bob carol junior; do
   TOK[$u]=$($VS user add "$card" 2>/dev/null)
 done
 $VS repo create app.git --admin alice 2>/dev/null
+# "ghost" is deliberately unregistered: unknown names in a rule must not break audience checks
 cat > "$SB/policy.json" <<'EOF'
 { "members": ["*"], "admins": ["alice"],
-  "groups": { "core": ["alice", "bob", "carol"] },
+  "groups": { "core": ["alice", "bob", "carol", "ghost"] },
   "files": { ".env": ["@core"], "secrets/**": ["@core"] },
   "branches": { "refs/heads/private/": ["@core"] } }
 EOF

@@ -55,12 +55,17 @@ export function refRule(policy, ref) {
 }
 
 /** Expand ["*", "@group", "name"] into a Set of user names. */
+// Names that aren't registered users are dropped: they can't authenticate, and keeping
+// them would make every other audience look "narrower" (e.g. a branch rule naming a
+// not-yet-registered user would make main look narrower than that branch).
 export function expand(policy, principals, allUsers) {
+  const known = new Set(allUsers);
   const out = new Set();
+  const add = (u) => known.has(u) && out.add(u);
   for (const p of principals || []) {
-    if (p === '*') allUsers.forEach((u) => out.add(u));
-    else if (p.startsWith('@')) (policy.groups?.[p.slice(1)] || []).forEach((u) => out.add(u));
-    else out.add(p);
+    if (p === '*') allUsers.forEach(add);
+    else if (p.startsWith('@')) (policy.groups?.[p.slice(1)] || []).forEach(add);
+    else add(p);
   }
   return out;
 }

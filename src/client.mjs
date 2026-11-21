@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as attest from './attest.mjs';
+import * as attrs from './attrs.mjs';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
@@ -64,8 +65,28 @@ function cmdWhoami() {
 
 // ------------------------------------------------------------------ policy
 
+// Veil state lives in the common git dir, shared by every `git worktree`.
 function gitDir() {
-  return gitStr(['rev-parse', '--absolute-git-dir']);
+  const { gitDir: own, common } = attrs.gitDirs();
+  if (own !== common) migrateWorktreeState(own, common);
+  return common;
+}
+
+/** Older veil kept state in .git/worktrees/<n>/veil. Move it once; never let it override the main repo's trust. */
+function migrateWorktreeState(own, common) {
+  const from = path.join(own, 'veil');
+  const to = path.join(common, 'veil');
+  if (!fs.existsSync(from)) return;
+  if (!fs.existsSync(to)) {
+    fs.renameSync(from, to);
+    return log(`moved this worktree's veil state to ${to} (shared by all worktrees)`);
+  }
+  const trust = (d) => (fs.existsSync(path.join(d, 'trust.json')) ? fs.readFileSync(path.join(d, 'trust.json'), 'utf8') : null);
+  const mine = trust(from);
+  if (mine !== null && mine !== trust(to)) {
+    die(`conflicting veil trust in worktree and main repo; delete one (${from}) after checking which admin key is right`);
+  }
+  fs.rmSync(from, { recursive: true, force: true });
 }
 const policyPath = (dir = gitDir()) => path.join(dir, 'veil', 'policy.json');
 
@@ -139,6 +160,7 @@ async function loadResolved(remoteUrl, gitDirOrNull) {
 function saveResolved({ policy, trust }, dir) {
   writePolicy(policy, dir);
   if (trust) attest.saveTrust(dir || gitDir(), trust);
+  attrs.pinAttributes(attributeLines(policy), dir || gitDir()); // clone, setup and pull-policy all pin
 }
 
 function configureFilters(cwd) {
@@ -159,6 +181,7 @@ function attributeLines(policy) {
 }
 
 function ensureAttributes(policy, cwd) {
+  attrs.pinAttributes(attributeLines(policy), attrs.commonGitDir(cwd)); // wins over any in-tree .gitattributes
   const p = path.join(cwd, '.gitattributes');
   const existing = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
   const have = new Set(existing.split('\n').map((l) => l.trim()));
@@ -170,8 +193,13 @@ function ensureAttributes(policy, cwd) {
 }
 
 function protectedFiles(policy, cwd) {
-  const out = gitStr(['ls-files', '-z'], { cwd });
-  return out.split('\0').filter((f) => f && fileRule(policy, f));
+  // `-t` tags skip-worktree entries 'S': a sparse checkout must not materialize excluded secrets.
+  const out = gitStr(['ls-files', '-t', '-z'], { cwd });
+  return out
+    .split('\0')
+    .filter((e) => e && e[0] !== 'S')
+    .map((e) => e.slice(2))
+    .filter((f) => fileRule(policy, f));
 }
 
 async function cmdSetup() {
@@ -278,7 +306,12 @@ function cmdSmudge([file]) {
   const input = fs.readFileSync(0);
   if (!vc.isEnvelope(input)) return void process.stdout.write(input);
   // A smudge failure would abort checkout (filter is required), so always emit something.
-  const r = tryOpen(input, file, loadPolicy({ required: false }), loadIdentity({ required: false }));
+  const policy = loadPolicy({ required: false });
+  if (!policy) {
+    log('no policy for this checkout. Run `veil setup`');
+    return void process.stdout.write(input);
+  }
+  const r = tryOpen(input, file, policy, loadIdentity({ required: false }));
   if (r.error && r.error !== 'no identity') log(`refusing to decrypt '${file}': ${r.error}`);
   process.stdout.write(r.plaintext ?? input);
 }
@@ -312,6 +345,9 @@ function cmdStatus() {
       if (!sameSet(have, want)) note = `  needs rekey (encrypted for ${have.join(',')}; policy says ${want.join(',')})`;
     } else if (blob) note = '  WARNING: committed in plaintext';
     console.log(`  ${state.padEnd(9)} ${f}  [${allowed.join(', ')}]${note}`);
+  }
+  for (const r of attrs.checkResolvedFilters(protectedFiles(policy, top), top)) {
+    console.log(`warning: '${r.path}' resolves to filter=${r.value}; veil requires filter=veil`);
   }
 }
 

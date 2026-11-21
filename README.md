@@ -48,6 +48,25 @@ just works: the pre-commit hook installed by `veil setup` re-seals it for its ne
 | `veil audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
 | `veil-server policy manifest app.git > m.json`, `veil policy-sign m.json > s.json`, `veil-server policy attest app.git s.json` | Admin signs the policy so a compromised server can't swap keys or add readers; clients pin the admin key on first contact (`VEIL_PIN_ADMIN=<fingerprint>` pins it up front) |
 
+## Worktrees, LFS and .gitattributes
+
+- **Pinned filter.** `veil setup`, `veil clone` and `veil pull-policy` write the policy's
+  `filter=veil` lines into a managed block of `.git/info/attributes` (between
+  `# >>> veil (managed) >>>` markers; your own lines there are kept). That file beats every
+  in-tree `.gitattributes`, so a teammate's `.env filter=lfs` line or a nested
+  `secrets/.gitattributes` can't route your plaintext to git-lfs, even with `--no-verify`
+  or an IDE that skips hooks. `veil status` warns if a protected path resolves to any other
+  filter, and the pre-commit hook refuses it.
+- **Server.** Pushes that make a protected path resolve to another filter (`filter=lfs`,
+  `-filter`, `!filter`, macros, nested files) are rejected, and only admins may set LFS
+  endpoints in `.lfsconfig` (`lfs.url`, `remote.*.lfsurl`, `url.*.insteadOf`). The server
+  needs git >= 2.40 for this check and refuses such pushes on older git.
+- **Worktrees.** `git worktree add` just works: veil keeps its policy and pinned admin key
+  in the main repo's git dir, shared by every worktree. State left in
+  `.git/worktrees/<n>/veil` by older versions is moved on the first veil command; if it
+  holds a different `trust.json`, veil stops and asks you to delete one.
+- **Sparse checkouts.** `veil setup` leaves paths excluded by `git sparse-checkout` alone.
+
 ## How it works
 
 1. **Client filter** (`clean`/`smudge`): protected paths are sealed with AES-256-GCM.

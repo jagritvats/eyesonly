@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import * as attest from './attest.mjs';
+import * as attrs from './attrs.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
@@ -445,6 +446,7 @@ function hookPreReceive() {
   };
   const checkCommit = (commit) => {
     const parents = g(['rev-list', '--parents', '-n1', commit]).split(' ').slice(1);
+    attrs.checkCommitAttributes({ commit, parents, policy, git: g, reject, isAdmin: expand(policy, policy.admins || [], all).has(user) });
     const mine = protectedEntries(commit);
     const theirs = parents.map(protectedEntries);
     for (const [file, entry] of mine) {

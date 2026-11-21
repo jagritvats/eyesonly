@@ -21,7 +21,7 @@ convenient; the server enforces.
 | A4 | **Careless authorized dev** | Forgets the filter, merges the wrong branch, renames files |
 | A5 | **Compromised server / host admin** | Out of scope for confidentiality of *refs*, but not of *files* (see below) |
 
-## Attacks and defenses (each one has a test in `test/e2e.sh`)
+## Attacks and defenses (each one has a test in `test/*.sh`)
 
 | # | Attack | Defense | Test |
 |---|---|---|---|
@@ -43,6 +43,7 @@ convenient; the server enforces.
 | 16 | Path traversal via repo name | Strict `^[A-Za-z0-9][A-Za-z0-9._-]*\.git$`; unknown and non-member repos both return 404 | ✅ |
 | 17 | Malicious env injection into `git http-backend` | Env is built from scratch (allow-list), `GIT_CONFIG_NOSYSTEM=1` | by design |
 | 18 | A1's client is tricked into decrypting/using a forged secret | Smudge checks the Ed25519 signature and that the signer is an allowed writer before writing plaintext | by design |
+| 19 | A1 probes whether the server holds a private commit via `have <sha>` ACKs (object-existence oracle) | Proxy parses the upload-pack body and drops have/shallow lines for objects not reachable from refs visible to the user; the response is byte-identical to a nonexistent sha | ✅ (test/oracle.sh) |
 
 ## Known limitations
 
@@ -54,10 +55,7 @@ These are stated plainly, because over-claiming is how security products lose tr
 2. **Metadata leaks on shared branches.** A1 sees that `.env` exists, its size (roughly),
    when it changed and who signed it. Hiding file *existence* needs a virtual-filesystem
    approach (Piper/CitC-style), not git's Merkle DAG.
-3. **Object-existence oracle.** In v0 negotiation a client can send `have <sha>` and
-   learn from ACKs whether the server holds an object. This needs a SHA they already
-   know. Mitigation (roadmap): ignore `have` lines for objects unreachable from visible
-   refs, or store private refs in a separate object store per audience.
+3. **Object-existence oracle.** Closed in v0.2 (attack #19). Remaining: the proxy still sees full bodies; unreachable-object checks rely on hideRefs prefixes.
 4. **Compromised server (A5).** The server can't read protected *files* (it never holds
    private keys), but it can see private *branches* (they're plaintext git objects), and
    it can lie about public keys in the policy endpoint. Mitigation (roadmap): pin

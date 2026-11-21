@@ -54,7 +54,9 @@ read a file, and `[veil: encrypted, readable by …]` to everyone else.
    there's no diff noise.
 2. **Proxy** (`veil-server serve`): authenticates tokens, hides refs per user, forces
    protocol v0 (v2 allows fetching hidden commits by SHA, as the test suite shows), and
-   serves no dumb HTTP.
+   serves no dumb HTTP. It also filters fetch negotiation: `have`/`shallow` lines for
+   commits the user can't see are dropped, so ACKs don't reveal that a private commit
+   exists (request bodies are capped at 10 MiB, `VEIL_MAX_UPLOAD_PACK_BODY` to change).
 3. **Hook** (pre-receive): enforces the server-side policy on every new commit, covering
    plaintext, unauthorized edits, forged/replayed envelopes, stale recipients and private
    history leaking into public branches.

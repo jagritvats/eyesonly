@@ -6,6 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { expand, fileRule, refRule, isSubset } from './policy.mjs';
+import { filterUploadPackBody, DEFAULT_MAX_BODY } from './negotiate.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_CLI = path.resolve(HERE, '..', 'bin', 'veil-server.mjs');
@@ -239,36 +240,79 @@ function handle(req, res, opts) {
   // reachability rules. Forcing v0 keeps want-validation against advertised refs.
   if (opts.allowV2 && req.headers['git-protocol']) env.GIT_PROTOCOL = req.headers['git-protocol'];
 
-  const child = spawn('git', ['http-backend'], { env });
-  req.pipe(child.stdin);
-  let head = Buffer.alloc(0);
-  let started = false;
-  child.stdout.on('data', (chunk) => {
-    if (started) return res.write(chunk);
-    head = Buffer.concat([head, chunk]);
-    const sep = head.indexOf('\r\n\r\n');
-    if (sep === -1) return;
-    started = true;
-    let status = 200;
-    const headers = {};
-    for (const line of head.subarray(0, sep).toString('utf8').split('\r\n')) {
-      const i = line.indexOf(':');
-      if (i < 0) continue;
-      const k = line.slice(0, i).trim();
-      const v = line.slice(i + 1).trim();
-      if (k.toLowerCase() === 'status') status = parseInt(v, 10);
-      else headers[k] = v;
+  if (service !== 'git-upload-pack' || req.method !== 'POST') return runBackend(env, res, user, repo, req);
+
+  // Upload-pack: buffer the request and drop have/shallow lines for objects this user
+  // can't see, so ACKs don't reveal whether the server holds a private commit.
+  const max = Number(process.env.VEIL_MAX_UPLOAD_PACK_BODY) || DEFAULT_MAX_BODY;
+  const tooBig = () => {
+    send(res, 413, `[veil] upload-pack request is larger than ${max} bytes\n`, { connection: 'close' });
+    req.resume(); // discard the rest; never reaches http-backend
+  };
+  if (Number(req.headers['content-length']) > max) return tooBig();
+  const chunks = [];
+  let total = 0;
+  let failed = false;
+  req.on('data', (c) => {
+    if (failed) return;
+    total += c.length;
+    if (total > max) {
+      failed = true;
+      chunks.length = 0;
+      return tooBig();
     }
-    res.writeHead(status, headers);
-    const rest2 = head.subarray(sep + 4);
-    if (rest2.length) res.write(rest2);
+    chunks.push(c);
   });
-  child.stderr.on('data', (d) => process.stderr.write(`[git ${user}@${repo}] ${d}`));
-  child.on('close', () => {
-    if (!started) send(res, 500, 'backend error\n');
-    else res.end();
+  req.on('end', () => {
+    if (failed) return;
+    filterUploadPackBody({ body: Buffer.concat(chunks), contentEncoding: req.headers['content-encoding'], gitDir: dir, hiddenPrefixes: hidden, maxBytes: max })
+      .then((buf) => {
+        env.CONTENT_LENGTH = String(buf.length);
+        delete env.HTTP_CONTENT_ENCODING;
+        runBackend(env, res, user, repo, buf);
+      })
+      .catch((e) => {
+        if (!e.status) console.error(`[veil-server] upload-pack filter failed for ${user}@${repo}:`, e);
+        if (!res.headersSent) send(res, e.status || 500, e.status ? `${e.message}\n` : 'internal error\n');
+      });
   });
-  req.on('aborted', () => child.kill());
+
+  // input: the request stream (piped through) or an already-filtered Buffer.
+  function runBackend(env, res, user, repo, input) {
+    const child = spawn('git', ['http-backend'], { env });
+    child.stdin.on('error', () => {}); // EPIPE if the backend exits before reading everything
+    if (Buffer.isBuffer(input)) child.stdin.end(input);
+    else input.pipe(child.stdin);
+    let head = Buffer.alloc(0);
+    let started = false;
+    child.stdout.on('data', (chunk) => {
+      if (started) return res.write(chunk);
+      head = Buffer.concat([head, chunk]);
+      const sep = head.indexOf('\r\n\r\n');
+      if (sep === -1) return;
+      started = true;
+      let status = 200;
+      const headers = {};
+      for (const line of head.subarray(0, sep).toString('utf8').split('\r\n')) {
+        const i = line.indexOf(':');
+        if (i < 0) continue;
+        const k = line.slice(0, i).trim();
+        const v = line.slice(i + 1).trim();
+        if (k.toLowerCase() === 'status') status = parseInt(v, 10);
+        else headers[k] = v;
+      }
+      res.writeHead(status, headers);
+      const rest2 = head.subarray(sep + 4);
+      if (rest2.length) res.write(rest2);
+    });
+    child.stderr.on('data', (d) => process.stderr.write(`[git ${user}@${repo}] ${d}`));
+    child.on('close', () => {
+      if (!started) send(res, 500, 'backend error\n');
+      else res.end();
+    });
+    if (Buffer.isBuffer(input)) res.on('close', () => child.exitCode === null && child.kill());
+    else input.on('aborted', () => child.kill());
+  }
 }
 
 function cmdServe(args) {

@@ -905,6 +905,8 @@ const USAGE = `eyesonly: per-user access control for git
                                refresh the cached policy (server, or the repo's default branch)
   eyesonly doctor              check this machine and clone, and say how to fix problems
   eyesonly policy-sign <file>  (admin) sign a policy manifest from eyesonly-server policy manifest
+  eyesonly admin --server <url> <command>
+                               (admin) manage users, repos and policies over the server's admin API
   eyesonly status              list protected files and whether you can read them
   eyesonly rekey               re-encrypt your readable files for the current policy
   eyesonly audit <user> [--since <date>] [--until <date>] [--json]
@@ -971,6 +973,7 @@ export async function main(argv) {
     'pre-push': (a) => import('./verify.mjs').then((m) => m.cmdPrePush(a)),
     'filter-process': cmdFilterProcess,
     doctor: cmdDoctor,
+    admin: (a) => import('./admin-client.mjs').then((m) => m.cmdAdmin(a)),
     '__cli-path': () => console.log(realOrSelf(CLI)),
   };
   if (!table[cmd]) {

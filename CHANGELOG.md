@@ -6,6 +6,10 @@
 - `eyesonly audit <user>` now lists each version with first/last dates, takes `--since`/`--until`, and has `--json`.
 - `eyesonly offboard <user>`: revoke (GitHub mode) or print the server steps, re-encrypt what you can read, stage it, and write a rotation checklist with dotenv key names only.
 - `eyesonly rotate <file> KEY=value... | --from-stdin`: set dotenv keys in a protected file, keeping comments and order, and stage it encrypted. Prints key names only.
+- Admin API (server): `eyesonly admin --server <url> ...` manages users, repos, policies, grants and revokes over HTTPS, and `eyesonly admin sign` re-signs a signed policy remotely (the private key stays on your machine). Admin tokens (`eyesonly-server admin-token create|list|revoke`) are separate from git tokens and only work for the API; server admins (`init` makes its admin one; `eyesonly-server server-admin`) manage everything, repo admins their repos. Endpoint reference in docs/admin-api.md.
+- Admin routes require HTTPS unless the client is on loopback; behind a TLS proxy set `EYESONLY_TRUST_PROXY=1` (the compose kit does).
+- Failed logins back off per client address and user name, for git and the admin API (HTTP 429 with Retry-After; `EYESONLY_AUTH_MAX_FAILURES`, `EYESONLY_AUTH_LOCKOUT_MS`, `EYESONLY_AUTH_LOCKOUT_MAX_MS`).
+- Audit log: `$EYESONLY_DATA/audit.log` records pushes (accepted or rejected, with refs and reason), failed logins and lockouts, policy fetches, admin actions from the CLI and the API, and installed signatures, never tokens. Each line hashes the previous one; `eyesonly-server audit-log --verify` finds edited, removed or inserted lines. Query with `audit-log --repo/--user/--type/--since/--json`.
 
 ## 0.4.0 (2026-11-22)
 - Docs and website lead with GitHub mode (repo mode, no server) and present the server as the upgrade: new guides `docs/github-mode.md` and `docs/choosing-a-mode.md` (including moving from GitHub mode to the server), and both modes covered in existing-repos, CI, team workflows, troubleshooting and the policy reference.

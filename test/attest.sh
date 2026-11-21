@@ -241,7 +241,7 @@ const pol = JSON.parse(fs.readFileSync(".git/eyesonly/policy.json"));
 const r = { alice: pol.keys.alice.x25519, mallory: id.x25519.pub };
 fs.writeFileSync(".env", vc.seal({ plaintext: Buffer.from("API_URL=https://evil\n"), path: ".env", recipients: r, signer: id }));
 ' "$SB/home/mallory"
-as mallory git add .env && as mallory git commit --no-verify -qm "evil env" >/dev/null
+as mallory git -c filter.eyesonly.process= -c filter.eyesonly.required=false -c filter.eyesonly.clean=cat add .env && as mallory git commit --no-verify -qm "evil env" >/dev/null
 expect_ok "server accepts mallory's envelope (she is in @core server-side)" as mallory git push -q
 in_ "$SB/alice2" as alice git pull -q >"$SB/out" 2>&1
 out_has "alice's smudge refuses mallory's signature" "bad or unknown signature"

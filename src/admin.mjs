@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import * as vc from './crypto.mjs';
 import * as store from './store.mjs';
 import { OpError } from './store.mjs';
-import { audit } from './audit.mjs';
+import { audit } from './auditlog.mjs';
 
 export const ADMIN_PREFIX = '/_eyesonly/admin/v1';
 const TOKEN_PREFIX = 'eyesonlyadm_';

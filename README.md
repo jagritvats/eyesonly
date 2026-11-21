@@ -353,7 +353,7 @@ src/attrs.mjs                       info/attributes pinning, filter-redirect che
 src/mirror.mjs                      outbound mirror to GitHub/GitLab
 src/store.mjs                       server state and operations (shared by the admin CLI and API)
 src/admin.mjs, src/admin-client.mjs admin API, admin tokens, login backoff; eyesonly admin
-src/audit.mjs                       hash-chained audit log
+src/auditlog.mjs                       hash-chained audit log
 src/server.mjs                      admin CLI, HTTP proxy, pre-receive hook
 action.yml, action/*.sh             GitHub Action: verify (GitHub mode) or clone + decrypt (server)
 test/*.sh                           adversarial suites (npm test runs them all)

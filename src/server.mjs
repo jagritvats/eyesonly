@@ -12,7 +12,7 @@ import * as refguard from './refguard.mjs';
 import { contentChecker } from './validate.mjs';
 import * as store from './store.mjs';
 import { OpError, DATA, REPO_RE, sha256, loadUsers, repoDir, policyFile, loadPolicy, loadAttestation, validatePolicy } from './store.mjs';
-import { audit, cmdAuditLog } from './audit.mjs';
+import { audit, cmdAuditLog } from './auditlog.mjs';
 import { ADMIN_PREFIX, AuthLimiter, clientIp, handleAdmin, cmdAdminToken, cmdServerAdmin } from './admin.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

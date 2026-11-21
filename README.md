@@ -38,7 +38,8 @@ cd app && echo "STRIPE_SECRET=..." > .env && git add .env && git commit -m env &
 ```
 
 Day to day it's just git. `git diff` and `git log -p` show plaintext to people who can
-read a file, and `[veil: encrypted, readable by …]` to everyone else.
+read a file, and `[veil: encrypted, readable by …]` to everyone else. `git mv` of a secret
+just works: the pre-commit hook installed by `veil setup` re-seals it for its new path.
 
 | Command | What it does |
 |---|---|

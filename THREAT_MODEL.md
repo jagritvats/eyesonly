@@ -43,6 +43,8 @@ convenient; the server enforces.
 | 16 | Path traversal via repo name | Strict `^[A-Za-z0-9][A-Za-z0-9._-]*\.git$`; unknown and non-member repos both return 404 | ✅ |
 | 17 | Malicious env injection into `git http-backend` | Env is built from scratch (allow-list), `GIT_CONFIG_NOSYSTEM=1` | by design |
 | 18 | A1's client is tricked into decrypting/using a forged secret | Smudge checks the Ed25519 signature and that the signer is an allowed writer before writing plaintext | by design |
+| 25 | A4 renames a protected file with `git mv` (stale path binding) | Pre-commit hook re-seals the envelope for the new path (refuses moves to unprotected paths); if the hook is bypassed the server still rejects the stale binding | ✅ (test/hooks.sh) |
+| 26 | A4/A1 stages plaintext or a stale-audience envelope | Pre-commit hook refuses plaintext and re-seals stale audiences before anything leaves the laptop (defense in depth; the server hook remains the boundary) | ✅ (test/hooks.sh) |
 
 ## Known limitations
 

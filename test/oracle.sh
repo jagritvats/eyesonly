@@ -134,7 +134,7 @@ C=$(post junior "$R/empty" "$R/o"); code_is "empty body -> 400" 400 "$C" "$R/o" 
 printf 'not gzip' > "$R/notgz"
 C=$(post junior "$R/notgz" "$R/o" -H 'Content-Encoding: gzip'); code_is "invalid gzip -> 400" 400 "$C" "$R/o" "not valid gzip"
 C=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/healthz"); [[ "$C" == 200 ]] && ok "server still healthy after malformed requests" || bad "healthz $C"
-head -c 11M /dev/zero > "$R/big"
+head -c $((11 * 1024 * 1024)) /dev/zero > "$R/big"   # no "11M" suffix: BSD head lacks it
 C=$(post junior "$R/big" "$R/o"); code_is "11 MiB body (Content-Length) -> 413" 413 "$C" "$R/o" "larger than"
 C=$(post junior "$R/big" "$R/o" -H 'Transfer-Encoding: chunked'); code_is "11 MiB chunked body (no Content-Length) -> 413" 413 "$C" "$R/o" "larger than"
 gzip -c "$R/big" > "$R/big.gz"

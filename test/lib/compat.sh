@@ -26,6 +26,11 @@ now_ms() {
   fi
 }
 
+# Backdate a file's mtime by <seconds> (`touch -d '2 hours ago'` is GNU-only).
+set_mtime_ago() {
+  node -e 'const t = Date.now() / 1000 - Number(process.argv[1]); require("fs").utimesSync(process.argv[2], t, t)' "$1" "$2"
+}
+
 # Windows has no POSIX permission bits: mode checks are skipped there (and say so).
 # check_mode <description> <expected-octal> <path>
 check_mode() {

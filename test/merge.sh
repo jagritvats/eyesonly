@@ -232,7 +232,7 @@ as alice git merge --abort
 
 echo "== stale temp files are swept"
 T="$(git rev-parse --path-format=absolute --git-common-dir)/eyesonly/tmp"
-echo stale > "$T/old" && touch -d '2 hours ago' "$T/old"
+echo stale > "$T/old" && set_mtime_ago 7200 "$T/old"
 in_ "$A" as alice git checkout -q -b sw1 && sedi 's/^L2=.*/L2=sw/' .env && as alice git commit -qam sw1
 as alice git checkout -q main && sedi 's/^L6=.*/L6=sw/' .env && as alice git commit -qam sw2
 expect_ok "merge after a crash succeeds" as alice git merge --no-edit sw1

@@ -77,14 +77,21 @@ cd app && echo "STRIPE_SECRET=..." > .env && git add .env && git commit -m env &
 
 ### Already have a repo or a clone?
 
-| Situation | Commands |
-|---|---|
-| Move your GitHub repo onto Eyes Only | `git remote rename origin github && git remote add origin https://you:<token>@host/app.git && git push -u origin --all && eyesonly setup` |
-| Teammate with an existing clone | `git remote set-url origin https://you:<token>@host/app.git && git pull && eyesonly setup` (pull first) |
-| Commit the `.env` you've been gitignoring | remove it from `.gitignore`, then `git add .env && git commit && git push` |
+```bash
+# move a GitHub repo onto Eyes Only (GitHub stays as a second remote)
+git remote rename origin github
+git remote add origin https://alice:<token>@git.example.com/app.git
+git push -u origin --all && git push origin --tags
+eyesonly setup && git add .gitattributes && git commit -m "eyesonly" && git push
 
-Full walkthrough, including history that already contains a secret:
-[docs/existing-repos.md](docs/existing-repos.md).
+# teammate with an existing clone: pull first, then setup
+git remote set-url origin https://bob:<token>@git.example.com/app.git
+git pull && eyesonly setup
+```
+
+Secrets already committed in plaintext? The server rejects that history; see
+[existing repos and clones](docs/existing-repos.md) for rotating and stripping it.
+**[Read the guides →](https://jagritvats.github.io/eyesonly/docs/)**
 
 Day to day it's just git. `git diff` and `git log -p` show plaintext to people who can
 read a file, and `[eyesonly: encrypted, readable by …]` to everyone else. `git mv` of a secret

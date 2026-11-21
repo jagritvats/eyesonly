@@ -69,8 +69,8 @@ echo "== client: filter=eyesonly is pinned in .git/info/attributes"
 expect_ok "bob clones" as bob $EYESONLY clone "$(url bob)" "$SB/bob"
 cd "$SB/bob"
 check "info/attributes has the managed block" grep -qF '# >>> eyesonly (managed) >>>' .git/info/attributes
-check "...with '/.env filter=eyesonly diff=eyesonly merge=eyesonly'" grep -qxF '/.env filter=eyesonly diff=eyesonly merge=eyesonly' .git/info/attributes
-check "...and '/secrets/** filter=eyesonly diff=eyesonly merge=eyesonly'" grep -qxF '/secrets/** filter=eyesonly diff=eyesonly merge=eyesonly' .git/info/attributes
+check "...with '/.env filter=eyesonly diff=eyesonly merge=eyesonly -text'" grep -qxF '/.env filter=eyesonly diff=eyesonly merge=eyesonly -text' .git/info/attributes
+check "...and '/secrets/** filter=eyesonly diff=eyesonly merge=eyesonly -text'" grep -qxF '/secrets/** filter=eyesonly diff=eyesonly merge=eyesonly -text' .git/info/attributes
 echo '.env filter=lfs' >> .gitattributes
 expect_out "with an in-tree '.env filter=lfs' override, .env still resolves to eyesonly" ".env: filter: eyesonly" git check-attr filter -- .env
 git config filter.lfs.clean "cat > '$SB/leak'"   # stand-in for git-lfs: anything it sees, it 'uploads'
@@ -94,7 +94,7 @@ reset_main bob "$SB/bob"
 printf '*.bin binary\r\n# mine\r\n' > .git/info/attributes
 as bob $EYESONLY pull-policy 2>/dev/null
 as bob $EYESONLY pull-policy 2>/dev/null
-check "pull-policy restores the block" grep -qxF '/.env filter=eyesonly diff=eyesonly merge=eyesonly' .git/info/attributes
+check "pull-policy restores the block" grep -qxF '/.env filter=eyesonly diff=eyesonly merge=eyesonly -text' .git/info/attributes
 [[ "$(grep -c '>>> eyesonly (managed)' .git/info/attributes)" == 1 ]] && ok "running it twice leaves exactly one block" || bad "duplicate managed block"
 check "the user's own CRLF lines survive byte for byte" grep -q $'^\\*\\.bin binary\r$' .git/info/attributes
 echo '.env filter=lfs' >> .gitattributes

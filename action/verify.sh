@@ -24,5 +24,10 @@ if [[ -z "$range" ]]; then
   [[ -z "$base" || "$base" =~ ^0+$ ]] && base=""   # new branch: verify falls back to the default branch
   range="${base}..${head}"
 fi
-echo "eyesonly verify --range $range"
-eyesonly verify --range "$range"
+args=(--range "$range")
+# A private branch pushed as a plain branch (someone without the client) is flagged by name.
+[[ -n "${EO_REF:-}" ]] && args+=(--ref "$EO_REF")
+# Sealed private branches: each ref under refs/eyesonly/b/ must be one encrypted envelope.
+[[ "${EO_SEALED:-true}" == true ]] && git remote get-url origin >/dev/null 2>&1 && args+=(--sealed origin)
+echo "eyesonly verify ${args[*]}"
+eyesonly verify "${args[@]}"

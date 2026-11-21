@@ -703,6 +703,11 @@ async function cmdStatus() {
   for (const r of attrs.checkResolvedFilters(protectedFiles(policy, top), top)) {
     console.log(`warning: '${r.path}' resolves to filter=${r.value}; eyesonly requires filter=eyesonly`);
   }
+  if (policy.mode === 'repo') {
+    const lines = (await import('./branches.mjs')).branchSummary(top, policy);
+    if (lines.length) console.log('private branches (sealed, see eyesonly branch list):');
+    for (const l of lines) console.log(`  ${l}`);
+  }
 }
 
 export function cmdRekey() {
@@ -775,7 +780,11 @@ async function cmdDoctor(args = []) {
   // remote and credentials (repo mode: the signed policy in the repo instead)
   const rr = isRepoMode ? {} : await attempt(() => resolveRemote(top, flags.remote));
   const remote = rr.value;
-  if (isRepoMode) await (await repoMode()).doctorRepo(top, { ok, warn, fail, id, remote: remoteHint(top, flags.remote).name });
+  if (isRepoMode) {
+    await (await repoMode()).doctorRepo(top, { ok, warn, fail, id, remote: remoteHint(top, flags.remote).name });
+    const pol = loadPolicy({ required: false });
+    if (pol) for (const l of (await import('./branches.mjs')).branchSummary(top, pol)) (/not pushed|never sealed|diverged/.test(l) ? warn : ok)(`private branch ${l}`);
+  }
   else if (rr.error) fail(rr.error.split('\n')[0], 'git remote add origin https://<you>@<server>/<repo>.git, or eyesonly setup --remote <name>');
   else {
     ok(`remote '${remote.name}' -> ${redact(remote.url)}`);
@@ -929,8 +938,10 @@ repo mode (no server; the signed policy lives in .eyesonly/policy.json):
   eyesonly grant <name> [--card <card> | --from-request] [--group <g>] [--files <glob>] [--admin]
   eyesonly revoke <name> [--group <g>]
   eyesonly policy show         rules, members, admins and their fingerprints
-  eyesonly verify [<base> [<head>]] | --range <a>..<b>
+  eyesonly verify [<base> [<head>]] | --range <a>..<b> [--ref <ref>] [--sealed [<remote>]]
                                check commits like the server would (CI and the pre-push hook)
+  eyesonly branch push [<branch>] | pull [<branch>|--all] | list | publish <branch> [--onto <b>] | delete <branch>
+                               private branches (policy prefix, e.g. private/*) sealed on the host
 
 identity: EYESONLY_IDENTITY (JSON or base64 of it), else the store named in
           $EYESONLY_HOME/config.json: the OS keychain, or $EYESONLY_HOME/identity.json
@@ -970,6 +981,7 @@ export async function main(argv) {
     revoke: (a) => repoMode().then((m) => m.cmdRevoke(a)),
     policy: (a) => repoMode().then((m) => m.cmdPolicy(a)),
     verify: (a) => import('./verify.mjs').then((m) => m.cmdVerify(a)),
+    branch: (a) => import('./branches.mjs').then((m) => m.cmdBranch(a)),
     'pre-push': (a) => import('./verify.mjs').then((m) => m.cmdPrePush(a)),
     'filter-process': cmdFilterProcess,
     doctor: cmdDoctor,

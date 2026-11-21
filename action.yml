@@ -29,6 +29,10 @@ inputs:
   range:
     description: "verify: <base>..<head> to check (default: the pull request's base..head, or the push's before..after)"
     required: false
+  sealed:
+    description: "verify: also shape-check the sealed private branches under refs/eyesonly/b/ on origin (true/false)"
+    required: false
+    default: "true"
   version:
     description: eyesonly version to install from npm
     required: false
@@ -64,6 +68,8 @@ runs:
         EO_RANGE: ${{ inputs.range }}
         EO_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         EO_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        EO_REF: ${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.head_ref) || github.ref }}
+        EO_SEALED: ${{ inputs.sealed }}
       run: bash "$GITHUB_ACTION_PATH/action/verify.sh"
     - id: clone
       if: inputs.mode != 'verify'

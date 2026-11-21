@@ -62,12 +62,14 @@ export async function detectMode(top, { explicit, remote = {} } = {}) {
   if (explicit && explicit !== 'repo' && explicit !== 'server') die('usage: --mode repo|server');
   const name = remote.name || 'origin';
   const url = remote.url !== undefined ? remote.url : tryGit(['config', `remote.${name}.url`], { cwd: top });
+  // Repo mode works without any remote, but a remote someone named must exist.
+  if (remote.named && !url) die(`no remote named '${name}' in this repo (git remote -v lists them).`);
   let mode = explicit;
   if (!mode) {
     if (await probeServer(url)) mode = 'server';
     else if (rp.policyTextAt(rp.defaultRef(top, name), top) != null) mode = 'repo';
     else if (isHttp(url)) mode = 'server'; // unreachable server: keep its error messages
-    else die(`no Eyes Only policy found: remote '${name}' is not an Eyes Only server and the default branch has no ${rp.POLICY_FILE}. An admin starts with \`eyesonly init\` (no server needed) or \`eyesonly-server init\`.`);
+    else die(`no Eyes Only policy found: remote '${name}' is not an Eyes Only server and the default branch has no ${rp.POLICY_FILE}. An admin starts with \`eyesonly init\` (no server needed) or \`eyesonly-server init\`. If your Eyes Only server is another remote, use --remote <name>.`);
   }
   const cached = tryGit(['config', '--local', 'eyesonly.mode'], { cwd: top });
   if (cached && cached !== mode && !explicit) {

@@ -382,12 +382,13 @@ function remoteHint(cwd, flag) {
       name = gitStr(['config', 'eyesonly.remote'], { cwd }) || null;
     } catch {}
   }
+  const named = Boolean(name); // chosen with --remote or remembered, so it must exist
   name ||= 'origin';
   let url = null;
   try {
     url = gitStr(['config', `remote.${name}.url`], { cwd });
   } catch {}
-  return { name, url };
+  return { name, url, named };
 }
 
 async function cmdSetup(args = []) {

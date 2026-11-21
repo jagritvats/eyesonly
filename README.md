@@ -64,6 +64,7 @@ Linux and macOS.
 ```bash
 # --- server, once (behind TLS in production; or `docker compose` in deploy/) ---
 export EYESONLY_DATA=/srv/eyesonly
+eyesonly keygen alice            # the admin's own identity
 eyesonly-server init --admin "$(eyesonly whoami | tail -1)" --repo app.git --url https://git.example.com
 eyesonly-server serve --port 8787   # init printed alice's token and the next commands
 

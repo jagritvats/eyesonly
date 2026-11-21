@@ -233,16 +233,11 @@ a1f3…  refs/heads/main
 
     <h3 class="qs">1. Server</h3>
 <div class="code"><span class="p"># install once: npm i -g eyesonly   (Node 22+, git 2.40+, macOS / Linux / Windows)</span>
-eyesonly-server user add eyesonlypub1:eyJuYW1lIjoiYWxpY2Ui…   <span class="p"># prints alice's token</span>
-eyesonly-server repo create app.git --admin alice
-eyesonly-server policy set app.git policy.json
-eyesonly-server serve --port 8787
-
-<span class="p"># policy.json</span>
-{ "members":  ["*"], "admins": ["alice"],
-  "groups":   { "core": ["alice", "bob"] },
-  "files":    { ".env": ["@core"], "secrets/**": ["@core"] },
-  "branches": { "refs/heads/private/": ["@core"] } }</div>
+eyesonly keygen alice                                     <span class="p"># the admin's own identity</span>
+eyesonly-server init --admin "$(eyesonly whoami | tail -1)" --repo app.git
+eyesonly-server serve --port 8787                          <span class="p"># init printed alice's token</span>
+<span class="p"># starter policy: @core reads .env and secrets/**, private/* branches are @core-only</span>
+<span class="p"># or with automatic HTTPS: docker compose up -d   (deploy/ in the repo)</span></div>
 
     <h3 class="qs">2. Each developer</h3>
 <div class="code">eyesonly keygen alice                 <span class="p"># send the printed card to your admin, get a token</span>

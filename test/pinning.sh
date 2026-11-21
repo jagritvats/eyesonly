@@ -5,6 +5,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/test/lib/compat.sh"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
@@ -96,7 +97,8 @@ as bob $EYESONLY pull-policy 2>/dev/null
 as bob $EYESONLY pull-policy 2>/dev/null
 check "pull-policy restores the block" grep -qxF '/.env filter=eyesonly diff=eyesonly merge=eyesonly -text' .git/info/attributes
 [[ "$(grep -c '>>> eyesonly (managed)' .git/info/attributes)" == 1 ]] && ok "running it twice leaves exactly one block" || bad "duplicate managed block"
-check "the user's own CRLF lines survive byte for byte" grep -q $'^\\*\\.bin binary\r$' .git/info/attributes
+# Compare bytes with node: grep in Git for Windows strips CRs before matching.
+check "the user's own CRLF lines survive byte for byte" node -e 'process.exit(require("fs").readFileSync(process.argv[1], "latin1").includes("*.bin binary\r\n# mine\r\n") ? 0 : 1)' .git/info/attributes
 echo '.env filter=lfs' >> .gitattributes
 expect_out ".env resolves to eyesonly again" ".env: filter: eyesonly" git check-attr filter -- .env
 as bob git checkout -q -- .gitattributes
@@ -124,9 +126,14 @@ reset_main junior .
 printf '[attr]sneaky filter=lfs\n.env sneaky\n' >> .gitattributes && as junior git add .gitattributes
 expect_reject "an attribute macro that expands to filter=lfs is rejected" "sets filter=lfs on protected path '.env'" push_commit junior . macro
 reset_main junior .
-printf '.env filter=lfs\n' > .GITATTRIBUTES && as junior git add .GITATTRIBUTES
+# Build the entry with plumbing: on a case-insensitive filesystem (macOS, Windows) writing
+# .GITATTRIBUTES would just overwrite .gitattributes, and the attack must reach the server anyway.
+CASE_BLOB=$(printf '.env filter=lfs\n' | git hash-object -w --stdin)
+as junior git update-index --add --cacheinfo "100644,$CASE_BLOB,.GITATTRIBUTES"
 expect_reject "a case variant .GITATTRIBUTES is rejected" "must be named exactly" push_commit junior . case
 reset_main junior .
+# On a case-insensitive filesystem the reset's removal of .GITATTRIBUTES deletes .gitattributes too.
+as junior git checkout -q origin/main -- .gitattributes
 echo '*.png binary' >> .gitattributes && as junior git add .gitattributes
 expect_ok "an unrelated .gitattributes change (*.png binary) is accepted" push_commit junior . png
 
@@ -145,7 +152,7 @@ reset_main junior .
 printf '[lfs]\n\tfetchexclude = big/\n' >> .lfsconfig && as junior git add .lfsconfig
 expect_ok "junior may change other .lfsconfig keys when the endpoint is unchanged" push_commit junior . fetchexclude
 reset_main junior .
-sed -i 's#attacker#evil#' .lfsconfig && as junior git add .lfsconfig
+sedi 's#attacker#evil#' .lfsconfig && as junior git add .lfsconfig
 expect_reject "junior may not edit the admin's endpoint" "only admins may change .lfsconfig endpoints" push_commit junior . swap
 reset_main junior .
 

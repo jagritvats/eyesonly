@@ -4,6 +4,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/test/lib/compat.sh"
 ROOT_URL="$(node -e 'console.log(require("node:url").pathToFileURL(process.argv[1]).href)' "$ROOT")"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
@@ -44,7 +45,8 @@ blob_dec() { git cat-file blob "$1" | dec "$2"; }
 # tmp_clean <repo> <label>: no plaintext temp files left, dir mode 700
 tmp_clean() {
   local t; t="$(cd "$1" && git rev-parse --path-format=absolute --git-common-dir)/eyesonly/tmp"
-  if [[ -d "$t" && -z "$(ls -A "$t")" && "$(stat -c %a "$t")" == 700 ]]; then ok "$2: eyesonly/tmp is empty, mode 700"
+  # Windows has no POSIX modes: there only emptiness is checked.
+  if [[ -d "$t" && -z "$(ls -A "$t")" ]] && { [[ -n "$IS_WINDOWS" ]] || [[ "$(file_mode "$t")" == 700 ]]; }; then ok "$2: eyesonly/tmp is empty, mode 700"
   else bad "$2: eyesonly/tmp not clean ($(ls -la "$t" 2>&1 | tr '\n' ' '))"; fi
 }
 
@@ -89,11 +91,11 @@ expect_ok "junior clones" as junior $EYESONLY clone "$(url junior)" "$J"
 
 echo "== clean auto-merge"
 in_ "$A" as alice git checkout -q -b a
-in_ "$A" sed -i 's/^L1=.*/L1=alice/' .env
+in_ "$A" sedi 's/^L1=.*/L1=alice/' .env
 in_ "$A" as alice git commit -qam "alice: L1"
 in_ "$A" as alice git push -q -u origin a 2>/dev/null
 cd "$B"
-sed -i 's/^L3=.*/L3=bob/' .env && as bob git commit -qam "bob: L3"
+sedi 's/^L3=.*/L3=bob/' .env && as bob git commit -qam "bob: L3"
 as bob git fetch -q origin
 expect_ok "git merge of non-overlapping .env edits succeeds" as bob git merge --no-edit origin/a
 expect_out "committed .env is a EYESONLY-V1 envelope" "^EYESONLY-V1" bash -c 'git cat-file blob HEAD:.env | head -1'
@@ -109,11 +111,11 @@ echo "== conflicting edits"
 in_ "$A" as alice git checkout -q main
 in_ "$A" as alice git pull -q --ff-only 2>/dev/null
 in_ "$A" as alice git checkout -q -b c
-in_ "$A" sed -i 's/^L5=.*/L5=alice-five/' .env
+in_ "$A" sedi 's/^L5=.*/L5=alice-five/' .env
 in_ "$A" as alice git commit -qam "alice: L5"
 in_ "$A" as alice git push -q -u origin c 2>/dev/null
 cd "$B"
-sed -i 's/^L5=.*/L5=bob-five/' .env && as bob git commit -qam "bob: L5"
+sedi 's/^L5=.*/L5=bob-five/' .env && as bob git commit -qam "bob: L5"
 as bob git fetch -q origin
 expect_reject "same-line merge stops with a conflict" "conflict in '.env'" as bob git merge --no-edit origin/c
 grep -q '^<<<<<<< ' .env && grep -q 'L5=alice-five' .env && grep -q 'L5=bob-five' .env && ! grep -q EYESONLY-V1 .env \
@@ -129,11 +131,11 @@ expect_out "resolved content is readable" "L5=resolved" as bob blob_dec HEAD:.en
 echo "== rebase"
 in_ "$A" as alice git checkout -q main
 in_ "$A" as alice git pull -q --ff-only 2>/dev/null
-in_ "$A" sed -i 's/^L1=.*/L1=alice-again/' .env
+in_ "$A" sedi 's/^L1=.*/L1=alice-again/' .env
 in_ "$A" as alice git commit -qam "alice: L1 again"
 in_ "$A" as alice git push -q 2>/dev/null
 cd "$B"
-sed -i 's/^L6=.*/L6=bob-six/' .env && as bob git commit -qam "bob: L6"
+sedi 's/^L6=.*/L6=bob-six/' .env && as bob git commit -qam "bob: L6"
 as bob git fetch -q origin
 expect_ok "git rebase over a different-line .env edit completes" as bob git rebase origin/main
 grep -q '^L1=alice-again$' .env && grep -q '^L6=bob-six$' .env && ok "rebased .env has both edits" || { bad "rebased .env"; cat .env; }
@@ -144,10 +146,10 @@ tmp_clean "$B" "rebase"
 echo "== path with spaces"
 in_ "$A" as alice git pull -q --ff-only 2>/dev/null
 in_ "$A" as alice git checkout -q -b sp
-in_ "$A" sed -i 's/^f1$/f1-alice/' "secrets/my file.txt"
+in_ "$A" sedi 's/^f1$/f1-alice/' "secrets/my file.txt"
 in_ "$A" as alice git commit -qam "alice: f1"
 in_ "$A" as alice git checkout -q main
-in_ "$A" sed -i 's/^f5$/f5-alice/' "secrets/my file.txt"
+in_ "$A" sedi 's/^f5$/f5-alice/' "secrets/my file.txt"
 in_ "$A" as alice git commit -qam "alice: f5"
 expect_ok "merge of a protected path with spaces succeeds" in_ "$A" as alice git merge --no-edit sp
 grep -q '^f1-alice$' "$A/secrets/my file.txt" && grep -q '^f5-alice$' "$A/secrets/my file.txt" && ok "spaced path merged both edits" || bad "spaced path"
@@ -164,10 +166,10 @@ tmp_clean "$A" "binary"
 
 echo "== non-reader"
 in_ "$A" as alice git checkout -q -b j1
-in_ "$A" sed -i 's/^L2=.*/L2=j1/' .env && in_ "$A" as alice git commit -qam j1
+in_ "$A" sedi 's/^L2=.*/L2=j1/' .env && in_ "$A" as alice git commit -qam j1
 in_ "$A" as alice git checkout -q main
 in_ "$A" as alice git checkout -q -b j2
-in_ "$A" sed -i 's/^L4=.*/L4=j2/' .env && in_ "$A" as alice git commit -qam j2
+in_ "$A" sedi 's/^L4=.*/L4=j2/' .env && in_ "$A" as alice git commit -qam j2
 in_ "$A" as alice git push -q origin j1 j2 2>/dev/null
 in_ "$A" as alice git checkout -q main
 cd "$J"
@@ -175,7 +177,7 @@ as junior git fetch -q origin
 as junior git checkout -q -b j1 origin/j1
 expect_reject "junior can't merge .env: not a reader" "you are not a reader" as junior git merge --no-edit origin/j2
 grep -q "ask one of: alice, bob" "$SB/out" && ok "message lists the readers" || { bad "readers not listed"; cat "$SB/out"; }
-cmp -s .env <(git cat-file blob origin/j1:.env) && ok "junior's .env is still the ours envelope" || bad ".env changed"
+cmp -s .env <(rawargs git cat-file blob origin/j1:.env) && ok "junior's .env is still the ours envelope" || bad ".env changed"
 tmp_clean "$J" "non-reader"
 as junior git merge --abort
 
@@ -197,7 +199,7 @@ plant() { # plant <branch> <blob> <path>: commit on top of main with hooks bypas
   git branch -f "$1" "$(as junior git commit-tree "$t" -p main -m "$1")"
 }
 plant forged "$FORGED" .env
-sed -i 's/^L3=.*/L3=alice-three/' .env && as alice git commit -qam "alice: L3"
+sedi 's/^L3=.*/L3=alice-three/' .env && as alice git commit -qam "alice: L3"
 OURS=$(git rev-parse HEAD:.env)
 expect_reject "merging a junior-signed .env is refused" "is not an allowed writer\|bad or unknown signature" as alice git merge --no-edit forged
 grep -q "can't merge '.env': theirs:" "$SB/out" && ok "refusal names the forged side" || bad "side not named"
@@ -222,7 +224,7 @@ as alice git merge --abort
 
 echo "== path-bound side"
 plant moved "$(git rev-parse main:secrets/a.txt)" .env
-sed -i 's/^L4=.*/L4=alice-four/' .env && as alice git commit -qam "alice: L4"
+sedi 's/^L4=.*/L4=alice-four/' .env && as alice git commit -qam "alice: L4"
 expect_reject "a side moved from secrets/a.txt is refused" "envelope is bound to" as alice git merge --no-edit moved
 ! grep -q '^a1$' .env && ok "working .env is still ours" || bad "moved content leaked into .env"
 tmp_clean "$A" "path-bound"
@@ -231,8 +233,8 @@ as alice git merge --abort
 echo "== stale temp files are swept"
 T="$(git rev-parse --path-format=absolute --git-common-dir)/eyesonly/tmp"
 echo stale > "$T/old" && touch -d '2 hours ago' "$T/old"
-in_ "$A" as alice git checkout -q -b sw1 && sed -i 's/^L2=.*/L2=sw/' .env && as alice git commit -qam sw1
-as alice git checkout -q main && sed -i 's/^L6=.*/L6=sw/' .env && as alice git commit -qam sw2
+in_ "$A" as alice git checkout -q -b sw1 && sedi 's/^L2=.*/L2=sw/' .env && as alice git commit -qam sw1
+as alice git checkout -q main && sedi 's/^L6=.*/L6=sw/' .env && as alice git commit -qam sw2
 expect_ok "merge after a crash succeeds" as alice git merge --no-edit sw1
 tmp_clean "$A" "sweep"
 

@@ -5,6 +5,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/test/lib/compat.sh"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
@@ -110,10 +111,10 @@ echo "== deletion and tags"
 in_ "$SB/junior" as junior git fetch -q -f --tags 2>/dev/null
 expect_reject "junior deletes main" "may not delete refs/heads/main" in_ "$SB/junior" as junior git push -q origin --delete main
 expect_reject "junior moves tag v1 with a force push" "may not force-push refs/tags/v1" \
-  in_ "$SB/junior" as junior git push -q -f origin "origin/main:refs/tags/v1"
+  in_ "$SB/junior" as junior rawargs git push -q -f origin "origin/main:refs/tags/v1"
 expect_reject "junior deletes tag v1" "may not delete refs/tags/v1" in_ "$SB/junior" as junior git push -q origin --delete v1
 expect_reject "a multi-ref push with one bad update is rejected as a whole" "may not delete refs/heads/main" \
-  in_ "$SB/junior" as junior git push -q origin "origin/main:refs/heads/junior-ok" ":refs/heads/main"
+  in_ "$SB/junior" as junior rawargs git push -q origin "origin/main:refs/heads/junior-ok" ":refs/heads/main"
 [[ -z "$(git --git-dir="$BARE" for-each-ref refs/heads/junior-ok)" ]] && ok "no ref from the rejected push was created" || bad "partial push landed"
 
 echo "== fast-forward to an existing commit that changes .env"
@@ -123,8 +124,8 @@ in_ "$SB/bob" as bob git commit -qam "new key (not merged)" >/dev/null
 expect_ok "bob pushes feature/env" in_ "$SB/bob" as bob git push -q origin feature/env
 in_ "$SB/junior" as junior git fetch -q 2>/dev/null
 expect_reject "junior fast-forwards main to bob's existing .env commit" "may not change protected file '.env'" \
-  in_ "$SB/junior" as junior git push -q origin "origin/feature/env:main"
-expect_ok "bob fast-forwards main to it himself" in_ "$SB/bob" as bob git push -q origin feature/env:main
+  in_ "$SB/junior" as junior rawargs git push -q origin "origin/feature/env:main"
+expect_ok "bob fast-forwards main to it himself" in_ "$SB/bob" as bob rawargs git push -q origin feature/env:main
 in_ "$SB/junior" as junior git fetch -q 2>/dev/null
 in_ "$SB/junior" as junior git checkout -q feature/j
 in_ "$SB/junior" as junior git merge -q --no-edit origin/main >/dev/null 2>&1

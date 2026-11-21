@@ -5,6 +5,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/test/lib/compat.sh"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 PORT2=$((PORT + 1))
@@ -201,8 +202,8 @@ HAVES=()
 for _ in $(seq 190); do HAVES+=("have $(rand_sha)"); done
 for c in "$PRIV" $(git rev-list main); do HAVES+=("have $c"); done   # PRIV first: unfiltered, it would be the one ACKed
 body "$R/perf" negotiate "${HAVES[@]}"
-T0=$(date +%s%N); C=$(post junior "$R/perf" "$R/o"); T1=$(date +%s%N)
-MS=$(((T1 - T0) / 1000000))
+T0=$(now_ms); C=$(post junior "$R/perf" "$R/o"); T1=$(now_ms)
+MS=$((T1 - T0))
 if [[ "$C" == 200 && $MS -lt 2000 ]] && ! grep -q "ACK $PRIV" "$R/o" && grep -q "ACK $MAIN" "$R/o"; then ok "${#HAVES[@]} have lines filtered in ${MS} ms (< 2000)"; else bad "perf: ${#HAVES[@]} haves took ${MS} ms (code $C)"; fi
 
 echo

@@ -3,160 +3,64 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import * as attest from './attest.mjs';
-import * as attrs from './attrs.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
-import { expand, fileRule, refRule, isSubset } from './policy.mjs';
+import { expand, refRule, isSubset } from './policy.mjs';
 import { filterUploadPackBody, DEFAULT_MAX_BODY } from './negotiate.mjs';
 import * as refguard from './refguard.mjs';
 import { contentChecker } from './validate.mjs';
+import * as store from './store.mjs';
+import { OpError, DATA, REPO_RE, sha256, loadUsers, repoDir, policyFile, loadPolicy, loadAttestation, validatePolicy } from './store.mjs';
+import { audit, cmdAuditLog } from './audit.mjs';
+import { ADMIN_PREFIX, AuthLimiter, clientIp, handleAdmin, cmdAdminToken, cmdServerAdmin } from './admin.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SERVER_CLI = path.resolve(HERE, '..', 'bin', 'eyesonly-server.mjs');
 const SITE = path.resolve(HERE, '..', 'site');
-const DATA = () => path.resolve(process.env.EYESONLY_DATA || 'eyesonly-data');
 const ZERO = '0'.repeat(40);
-const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.git$/;
 
 const die = (msg) => {
   console.error(`[eyesonly-server] ${msg}`);
   process.exit(1);
 };
-const sha256 = (s) => crypto.createHash('sha256').update(s).digest();
-
-// ------------------------------------------------------------------ storage
-
-const usersFile = () => path.join(DATA(), 'users.json');
-function loadUsers() {
-  return fs.existsSync(usersFile()) ? JSON.parse(fs.readFileSync(usersFile(), 'utf8')).users : {};
-}
-function saveUsers(users) {
-  fs.mkdirSync(DATA(), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(usersFile() + '.tmp', JSON.stringify({ users }, null, 2), { mode: 0o600 });
-  fs.renameSync(usersFile() + '.tmp', usersFile());
-}
-const repoDir = (name) => path.join(DATA(), 'repos', name);
-const policyFile = (dir) => path.join(dir, 'eyesonly.json');
-function loadPolicy(dir) {
-  return JSON.parse(fs.readFileSync(policyFile(dir), 'utf8'));
-}
-
-function validatePolicy(p) {
-  const arr = (v, what) => {
-    if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) throw new Error(`${what} must be a list of names`);
-  };
-  arr(p.members, 'members');
-  arr(p.admins || [], 'admins');
-  for (const [g, m] of Object.entries(p.groups || {})) arr(m, `groups.${g}`);
-  for (const [f, m] of Object.entries(p.files || {})) arr(m, `files["${f}"]`);
-  for (const [b, m] of Object.entries(p.branches || {})) {
-    if (!b.startsWith('refs/')) throw new Error(`branch rule '${b}' must start with refs/`);
-    arr(m, `branches["${b}"]`);
+/** Run a store operation; report its OpError the CLI way. */
+const op = (fn) => {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof OpError) die(e.message);
+    throw e;
   }
-  refguard.validateRefPolicy(p);
-  return p;
-}
+};
+const cliLog = (fields) => audit('admin', { actor: 'local-cli', via: 'cli', ...fields });
 
 // ------------------------------------------------------------------- admin
-
-function newToken() {
-  return 'eyesonly_' + crypto.randomBytes(24).toString('base64url');
-}
-
-function readCard(s, what = 'card') {
-  try {
-    return vc.decodeCard(s || '');
-  } catch (e) {
-    die(`invalid ${what}: ${e.message}`);
-  }
-}
-
-/** Register a user; returns their token (shown once by the caller). */
-function addUser(users, card) {
-  if (Object.hasOwn(users, card.name)) die(`user '${card.name}' exists`);
-  const token = newToken();
-  users[card.name] = { x25519: card.x25519, ed25519: card.ed25519, tokenHash: sha256(token).toString('hex'), created: new Date().toISOString() };
-  saveUsers(users);
-  return token;
-}
-
-/** What has to happen after a user's public keys change, per repo. */
-function keyChangeAdvice(name, users) {
-  const root = path.join(DATA(), 'repos');
-  const all = Object.keys(users);
-  const lines = [];
-  for (const repo of fs.existsSync(root) ? fs.readdirSync(root) : []) {
-    const dir = repoDir(repo);
-    if (!fs.existsSync(policyFile(dir))) continue;
-    const policy = loadPolicy(dir);
-    const reads = Object.values(policy.files || {}).some((who) => expand(policy, who, all).has(name));
-    const att = loadAttestation(dir);
-    if (reads) {
-      lines.push(
-        `${repo}: a reader with a decrypted checkout runs \`eyesonly pull-policy && eyesonly rekey\`, commits and pushes, so files are re-wrapped for ${name}'s new key. ` +
-          `Files ${name} last wrote were signed with the old key; clients refuse them until they're re-sealed that way.`
-      );
-    }
-    if (att && (reads || att.signer === name)) {
-      lines.push(`${repo}: the signed policy is now stale and clients keep the old keys until an admin re-signs (policy manifest -> eyesonly policy-sign -> policy attest).`);
-    }
-    if (att?.signer === name) {
-      lines.push(`${repo}: members pinned ${name}'s old admin key. After re-signing, they verify the new fingerprint with ${name} and re-pin (delete .git/eyesonly/trust.json, or set EYESONLY_PIN_ADMIN).`);
-    }
-  }
-  for (const l of lines) console.error(`  - ${l}`);
-  console.error(`  - Whoever holds the old private key can still read everything it could decrypt before. If it was lost or stolen, run \`eyesonly audit ${name}\` and rotate what it lists.`);
-}
 
 function cmdUser([sub, arg]) {
   const users = loadUsers();
   if (sub === 'add') {
-    const card = readCard(arg);
-    const token = addUser(users, card);
+    const card = op(() => store.parseCard(arg));
+    const token = op(() => store.addUser(users, card));
+    cliLog({ action: 'user add', target: card.name });
     console.error(`added ${card.name} (fingerprint ${vc.fingerprint(card)}). Token, shown once:`);
     console.log(token);
   } else if (sub === 'set-key') {
-    // Lost key or new machine: same user, same token, new public keys.
-    const card = readCard(arg);
-    const u = Object.hasOwn(users, card.name) ? users[card.name] : null;
-    if (!u) die(`no such user '${card.name}' (new users: eyesonly-server user add <card>)`);
-    if (u.x25519 === card.x25519 && u.ed25519 === card.ed25519) die(`'${card.name}' already has this key`);
-    const old = vc.fingerprint({ x25519: u.x25519, ed25519: u.ed25519 });
-    Object.assign(u, { x25519: card.x25519, ed25519: card.ed25519, keyChanged: new Date().toISOString() });
-    saveUsers(users);
-    console.error(`replaced ${card.name}'s key: ${old} -> ${vc.fingerprint(card)} (token unchanged). Next:`);
-    keyChangeAdvice(card.name, users);
+    const card = op(() => store.parseCard(arg));
+    const fp = op(() => store.setUserKey(users, card));
+    cliLog({ action: 'user set-key', target: card.name, old_fingerprint: fp.old, new_fingerprint: fp.new });
+    console.error(`replaced ${card.name}'s key: ${fp.old} -> ${fp.new} (token unchanged). Next:`);
+    for (const l of store.keyChangeAdvice(card.name, users)) console.error(`  - ${l}`);
   } else if (sub === 'token') {
-    if (!users[arg]) die(`no such user '${arg}'`);
-    const token = newToken();
-    users[arg].tokenHash = sha256(token).toString('hex');
-    saveUsers(users);
+    const token = op(() => store.rotateUserToken(users, arg));
+    cliLog({ action: 'user token', target: arg });
     console.log(token);
   } else if (sub === 'remove') {
-    if (!users[arg]) die(`no such user '${arg}'`);
-    delete users[arg];
-    saveUsers(users);
+    op(() => store.removeUser(users, arg));
+    cliLog({ action: 'user remove', target: arg });
     console.error(`removed ${arg}. Run \`eyesonly audit ${arg}\` in each repo and rotate what it lists.`);
   } else if (sub === 'list') {
-    for (const [n, u] of Object.entries(users)) console.log(`${n}\t${vc.fingerprint({ x25519: u.x25519, ed25519: u.ed25519 })}`);
+    for (const [n, u] of Object.entries(users)) console.log(`${n}\t${store.userFingerprint(u)}`);
   } else die('usage: eyesonly-server user add <eyesonlypub1:...> | set-key <eyesonlypub1:...> | token <name> | remove <name> | list');
-}
-
-function installHook(dir) {
-  const hook = path.join(dir, 'hooks', 'pre-receive');
-  fs.writeFileSync(hook, `#!/bin/sh\nexec '${process.execPath}' '${SERVER_CLI}' hook pre-receive\n`, { mode: 0o755 });
-}
-
-function createRepo(name, policy) {
-  const dir = repoDir(name);
-  if (fs.existsSync(dir)) die(`repo ${name} exists`);
-  fs.mkdirSync(path.dirname(dir), { recursive: true });
-  execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', dir]);
-  execFileSync('git', ['config', '-f', path.join(dir, 'config'), 'http.getanyfile', 'false']);
-  installHook(dir);
-  fs.writeFileSync(policyFile(dir), JSON.stringify(policy, null, 2));
-  return dir;
 }
 
 function cmdRepo([sub, name, ...rest]) {
@@ -164,35 +68,29 @@ function cmdRepo([sub, name, ...rest]) {
     if (!REPO_RE.test(name || '')) die('repo name must look like name.git');
     const admin = rest[rest.indexOf('--admin') + 1];
     if (!rest.includes('--admin') || !loadUsers()[admin]) die('usage: eyesonly-server repo create <name.git> --admin <existing-user>');
-    const dir = createRepo(name, { members: ['*'], admins: [admin], groups: {}, files: {}, branches: {} });
+    const dir = op(() => store.createRepo(name, store.starterPolicy(admin)));
+    cliLog({ action: 'repo create', target: name, repo: name, admin });
     console.error(`created ${dir}`);
   } else if (sub === 'list') {
-    const root = path.join(DATA(), 'repos');
-    if (fs.existsSync(root)) fs.readdirSync(root).forEach((r) => console.log(r));
+    store.listRepos().forEach((r) => console.log(r));
   } else die('usage: eyesonly-server repo create <name.git> --admin <user> | list');
 }
 
 function cmdPolicy([sub, name, file]) {
-  const dir = repoDir(name || '');
-  if (!REPO_RE.test(name || '') || !fs.existsSync(dir)) die('no such repo');
+  const dir = op(() => store.existingRepo(name));
   if (sub === 'show') return console.log(fs.readFileSync(policyFile(dir), 'utf8'));
   if (sub === 'set') {
-    const raw = fs.readFileSync(file === '-' || !file ? 0 : file, 'utf8');
     let p;
     try {
-      p = validatePolicy(JSON.parse(raw));
+      p = JSON.parse(fs.readFileSync(file === '-' || !file ? 0 : file, 'utf8'));
     } catch (e) {
       die(`invalid policy: ${e.message}`);
     }
-    fs.writeFileSync(policyFile(dir) + '.tmp', JSON.stringify(p, null, 2));
-    fs.renameSync(policyFile(dir) + '.tmp', policyFile(dir));
+    const h = op(() => store.savePolicy(dir, p));
+    cliLog({ action: 'policy set', repo: name, before: h.before, after: h.after });
     return console.error('policy updated. Members should run `eyesonly pull-policy && eyesonly rekey`.');
   }
-  if (sub === 'manifest') {
-    const installed = loadAttestation(dir);
-    const version = (installed?.manifest.version || 0) + 1;
-    return console.log(attest.canonical(attest.buildManifest({ repo: name, policy: loadPolicy(dir), users: loadUsers(), version })));
-  }
+  if (sub === 'manifest') return console.log(attest.canonical(store.nextManifest(name, dir)));
   if (sub === 'attest') {
     let att;
     try {
@@ -200,25 +98,8 @@ function cmdPolicy([sub, name, file]) {
     } catch (e) {
       die(`can't read signed manifest: ${e.message}`);
     }
-    const policy = loadPolicy(dir);
-    const users = loadUsers();
-    if (!att?.manifest || typeof att.signer !== 'string') die('not a signed manifest (expected the output of `eyesonly policy-sign`)');
-    if (!expand(policy, policy.admins || [], Object.keys(users)).has(att.signer)) die(`'${att.signer}' is not an admin of ${name}`);
-    const u = Object.hasOwn(users, att.signer) ? users[att.signer] : null;
-    if (!u || att.signer_ed25519 !== u.ed25519 || !attest.verifyAttestation(att)) {
-      die(`bad signature: not a valid signature by ${att.signer}'s registered key`);
-    }
-    const installed = loadAttestation(dir);
-    const current = attest.buildManifest({ repo: name, policy, users, version: 0 });
-    if (attest.manifestContent(att.manifest) !== attest.manifestContent(current)) {
-      die(`signed manifest does not match current policy. Re-run: eyesonly-server policy manifest ${name}`);
-    }
-    const v = att.manifest.version;
-    if (att.manifest.v !== 1 || !Number.isInteger(v) || v < 1 || (installed && v <= installed.manifest.version)) {
-      die(`version must increase (installed: ${installed?.manifest.version ?? 'none'}, signed: ${v}). Re-run: eyesonly-server policy manifest ${name}`);
-    }
-    fs.writeFileSync(attestationFile(dir) + '.tmp', JSON.stringify(att, null, 2));
-    fs.renameSync(attestationFile(dir) + '.tmp', attestationFile(dir));
+    const v = op(() => store.installAttestation(name, dir, att));
+    audit('attestation', { actor: 'local-cli', repo: name, version: v, signer: att.signer, via: 'cli' });
     return console.error(`installed policy v${v} signed by ${att.signer}. Members pick it up with \`eyesonly pull-policy\`.`);
   }
   die('usage: eyesonly-server policy show|set <name.git> [file|-] | manifest <name.git> | attest <name.git> <signed.json>');
@@ -233,7 +114,7 @@ function cmdInit(args) {
   const cardArg = opt('--admin');
   const name = opt('--repo');
   if (!cardArg || !name) die(INIT_USAGE);
-  const card = readCard(cardArg, '--admin card');
+  const card = op(() => store.parseCard(cardArg, '--admin card'));
   if (!REPO_RE.test(name)) die('--repo must look like name.git');
   const files = (opt('--files') ?? '.env,secrets/**').split(',').map((s) => s.trim()).filter(Boolean);
   const prefix = opt('--private-prefix') ?? 'refs/heads/private/';
@@ -263,14 +144,18 @@ function cmdInit(args) {
   }
 
   fs.mkdirSync(DATA(), { recursive: true, mode: 0o700 });
-  const token = addUser(users, card);
-  createRepo(name, policy);
+  const token = op(() => store.addUser(users, card));
+  op(() => store.createRepo(name, policy));
+  const cfg = store.loadServerConfig();
+  if (!cfg.server_admins.includes(card.name)) cfg.server_admins.push(card.name);
+  store.saveServerConfig(cfg);
+  cliLog({ action: 'init', target: card.name, repo: name });
 
   const host = base.host;
   const repoUrl = (u) => `${base.protocol}//${card.name}:${u}@${host}${base.pathname.replace(/\/+$/, '')}/${name}`;
   const e = (s) => console.error(s);
   e(`initialized ${DATA()}`);
-  e(`  admin   ${card.name} (fingerprint ${vc.fingerprint(card)})`);
+  e(`  admin   ${card.name} (fingerprint ${vc.fingerprint(card)}), server admin`);
   e(`  repo    ${name}`);
   e(`  secrets ${files.length ? files.join(', ') : '(none)'} readable by @core (${card.name})`);
   if (prefix) e(`  private ${prefix}* visible to @core only`);
@@ -290,28 +175,35 @@ Next:
        eyesonly-server user add <their card>         (prints their token)
      and, to let them read the secrets, add them to "core":
        eyesonly-server policy show ${name} > policy.json   # edit groups.core
-       eyesonly-server policy set ${name} policy.json`);
-}
-
-const attestationFile = (dir) => path.join(dir, 'eyesonly-attestation.json');
-function loadAttestation(dir) {
-  return fs.existsSync(attestationFile(dir)) ? JSON.parse(fs.readFileSync(attestationFile(dir), 'utf8')) : null;
+       eyesonly-server policy set ${name} policy.json
+  4. Or manage the server from your laptop over HTTPS (docs/admin-api.md):
+       eyesonly-server admin-token create ${card.name}
+       eyesonly admin --server ${base.origin} user add <their card>`);
 }
 
 // ------------------------------------------------------------- HTTP proxy
 
+/** Git auth: { user } on success, { attempted, name } otherwise (attempted = credentials were sent). */
 function authenticate(req, users) {
   const h = req.headers.authorization || '';
-  if (!h.startsWith('Basic ')) return null;
+  if (!h.startsWith('Basic ')) return { attempted: !!h, name: null };
   const raw = Buffer.from(h.slice(6), 'base64').toString('utf8');
   const i = raw.indexOf(':');
-  if (i < 1) return null;
-  const name = raw.slice(0, i);
+  if (i < 1) return { attempted: true, name: null };
+  const name = raw.slice(0, i).slice(0, 64);
   const u = Object.hasOwn(users, name) ? users[name] : null;
   // Always hash and compare so unknown users and wrong tokens take the same path.
   const want = u ? Buffer.from(u.tokenHash, 'hex') : crypto.randomBytes(32);
   const ok = crypto.timingSafeEqual(sha256(raw.slice(i + 1)), want);
-  return ok && u ? name : null;
+  return ok && u ? { user: name } : { attempted: true, name };
+}
+
+/** The user name a Basic header claims, unverified (for lockout bookkeeping only). */
+function basicUser(req) {
+  const h = req.headers.authorization || '';
+  if (!h.startsWith('Basic ')) return '';
+  const raw = Buffer.from(h.slice(6), 'base64').toString('utf8');
+  return raw.slice(0, Math.max(0, raw.indexOf(':'))).slice(0, 64);
 }
 
 function clientPolicy(repo, policy, users, user) {
@@ -344,6 +236,7 @@ function handle(req, res, opts) {
     if (fs.existsSync(f)) return send(res, 200, fs.readFileSync(f), { 'content-type': 'text/html; charset=utf-8' });
   }
   if (url.pathname === '/healthz') return send(res, 200, 'ok\n');
+  if (url.pathname === ADMIN_PREFIX || url.pathname.startsWith(ADMIN_PREFIX + '/')) return handleAdmin(req, res, opts);
 
   const m = url.pathname.match(/^\/([^/]+)(\/.*)$/);
   if (!m || !REPO_RE.test(m[1])) return send(res, 404, 'not found\n');
@@ -351,8 +244,26 @@ function handle(req, res, opts) {
   const dir = repoDir(repo);
 
   const users = loadUsers();
-  const user = authenticate(req, users);
-  if (!user) return send(res, 401, 'authentication required\n', { 'www-authenticate': 'Basic realm="eyesonly"' });
+  const ip = clientIp(req);
+  const claimed = basicUser(req);
+  const wait = opts.limiter.retryAfter(ip, claimed);
+  if (wait > 0) {
+    req.resume();
+    return send(res, 429, '[eyesonly] too many failed logins; try again later\n', { 'retry-after': String(Math.ceil(wait / 1000)) });
+  }
+  const auth = authenticate(req, users);
+  const user = auth.user;
+  if (!user) {
+    // The first request from git carries no credentials; only wrong ones count as failures.
+    if (auth.attempted) {
+      const locked = opts.limiter.fail(ip, auth.name);
+      audit('auth_failure', { route: 'git', ip, user: auth.name || undefined, repo });
+      if (locked) audit('lockout', { route: 'git', ip, user: auth.name || undefined, ms: locked, failures: opts.limiter.max });
+    }
+    req.resume();
+    return send(res, 401, 'authentication required\n', { 'www-authenticate': 'Basic realm="eyesonly"' });
+  }
+  opts.limiter.succeed(ip, user);
   // Same 404 for "doesn't exist" and "not a member" so repo names don't leak.
   if (!fs.existsSync(policyFile(dir))) return send(res, 404, 'not found\n');
   const policy = loadPolicy(dir);
@@ -360,6 +271,7 @@ function handle(req, res, opts) {
   if (!expand(policy, policy.members, all).has(user)) return send(res, 404, 'not found\n');
 
   if (req.method === 'GET' && rest === '/eyesonly/policy') {
+    audit('policy_fetch', { user, repo, ip });
     const view = clientPolicy(repo, policy, users, user);
     const attestation = loadAttestation(dir);
     if (attestation) {
@@ -375,7 +287,10 @@ function handle(req, res, opts) {
   const service = route?.service(url.searchParams);
   if (!route || !['git-upload-pack', 'git-receive-pack'].includes(service)) return send(res, 404, 'not found\n');
   // Early, friendly refusal for read-only members; the pre-receive hook is the real boundary.
-  if (service === 'git-receive-pack' && !refguard.canWrite(policy, user, all)) return send(res, 403, '[eyesonly] read-only access\n');
+  if (service === 'git-receive-pack' && !refguard.canWrite(policy, user, all)) {
+    if (req.method === 'POST') audit('push', { user, repo, refs: [], result: 'rejected', reason: 'read-only access' });
+    return send(res, 403, '[eyesonly] read-only access\n');
+  }
 
   const hidden = Object.entries(policy.branches || {})
     .filter(([, who]) => !expand(policy, who, all).has(user))
@@ -495,7 +410,7 @@ function handle(req, res, opts) {
 function cmdServe(args) {
   const port = Number((args.includes('--port') && args[args.indexOf('--port') + 1]) || process.env.PORT || 8787);
   const host = args.includes('--host') ? args[args.indexOf('--host') + 1] : '127.0.0.1';
-  const opts = { allowV2: process.env.EYESONLY_ALLOW_PROTOCOL_V2 === '1' };
+  const opts = { allowV2: process.env.EYESONLY_ALLOW_PROTOCOL_V2 === '1', limiter: new AuthLimiter() };
   const server = http.createServer((req, res) => {
     try {
       handle(req, res, opts);
@@ -510,7 +425,22 @@ function cmdServe(args) {
 // ----------------------------------------------------------- pre-receive
 
 function hookPreReceive() {
+  // Read the ref updates first so a rejection can be logged with what was pushed.
+  const updates = fs
+    .readFileSync(0, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => l.split(' '));
+  const pushLog = (result, reason) =>
+    audit('push', {
+      user: process.env.EYESONLY_USER || null,
+      repo: path.basename(process.cwd()),
+      refs: updates.map(([o, n, r]) => ({ ref: r, old: o, new: n })),
+      result,
+      ...(reason ? { reason } : {}),
+    });
   const reject = (msg) => {
+    pushLog('rejected', msg);
     console.error(`\n[eyesonly] REJECTED: ${msg}\n`);
     process.exit(1);
   };
@@ -569,8 +499,7 @@ function hookPreReceive() {
   try {
     headRef = g(['symbolic-ref', '-q', 'HEAD']) || null;
   } catch {}
-  for (const line of lines(fs.readFileSync(0, 'utf8'))) {
-    const [oldOid, newOid, ref] = line.split(' ');
+  for (const [oldOid, newOid, ref] of updates) {
     const rule = refRule(policy, ref);
     if (rule && !expand(policy, rule.who, all).has(user)) reject(`'${user}' may not push to '${ref}'`);
     const update = { policy, all, user, oldOid, newOid, ref, headRef, git: g, reject, validate: validateBlob };
@@ -622,6 +551,7 @@ function hookPreReceive() {
     //    (a force-push or fast-forward to an old commit still encrypted to a revoked user).
     refguard.checkRefContent(update);
   }
+  pushLog('accepted');
 }
 
 // ------------------------------------------------------------------- main
@@ -644,6 +574,11 @@ const USAGE = `eyesonly-server: auth proxy + policy enforcement for eyesonly rep
   eyesonly-server mirror set <name.git> --url U --push <ref|glob>... [--allow-force] [--delete-upstream on-private] [--credential-file F] [--allow-local]
   eyesonly-server mirror show <name.git>           print the mirror config (credential path only)
   eyesonly-server mirror push <name.git>           push verified public refs to the upstream (fails closed)
+  eyesonly-server admin-token create <user> [--name <label>]   token for the admin API (docs/admin-api.md); not for git
+  eyesonly-server admin-token list | revoke <id>
+  eyesonly-server server-admin list | add <user> | remove <user>   who may manage every user and repo over the API
+  eyesonly-server audit-log [--repo R] [--user U] [--type T] [--since DATE] [--json]
+  eyesonly-server audit-log --verify               check the audit log's hash chain
   eyesonly-server serve [--port 8787] [--host 127.0.0.1]`;
 
 export async function main([cmd, ...rest]) {
@@ -653,6 +588,9 @@ export async function main([cmd, ...rest]) {
   if (cmd === 'policy') return cmdPolicy(rest);
   if (cmd === 'serve') return cmdServe(rest);
   if (cmd === 'mirror') return (await import('./mirror.mjs')).cmdMirror(rest);
+  if (cmd === 'admin-token') return cmdAdminToken(rest);
+  if (cmd === 'server-admin') return cmdServerAdmin(rest);
+  if (cmd === 'audit-log') return cmdAuditLog(rest);
   if (cmd === 'hook' && rest[0] === 'pre-receive') return hookPreReceive();
   console.error(USAGE);
   process.exit(cmd ? 1 : 0);

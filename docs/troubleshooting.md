@@ -427,6 +427,48 @@ Reconcile by hand.
 Two mirror pushes overlapped, usually from cron. Remove the lock only if no push is
 running.
 
+## Admin API
+
+### `too many failed logins; try again later` (HTTP 429) or `too many failed attempts`
+
+**Cause:** wrong tokens from your address tripped the server's failed-login backoff (5 per
+user name by default, doubling lockouts up to 15 minutes). Behind a NAT, colleagues share an
+address.
+**Fix:** wait for the `Retry-After` seconds, fix the token (`git remote get-url origin`,
+your credential helper, or `--token-file`). Admins can raise the limits with
+`EYESONLY_AUTH_MAX_FAILURES`; a server restart clears all lockouts.
+
+### `admin token required (Authorization: Bearer eyesonlyadm_...)`
+
+**Cause:** no token, a git token instead of an admin token, a revoked token, or the token's
+user no longer admins anything. The two kinds of token never stand in for each other.
+**Fix:** on the server, `eyesonly-server admin-token create <you>`, then pass it with
+`--token-file` or `EYESONLY_ADMIN_TOKEN`.
+
+### `the admin API needs HTTPS`
+
+**Cause:** the request reached the server over plain HTTP from another machine, or through
+a proxy without `EYESONLY_TRUST_PROXY=1` (then every request looks like plain HTTP).
+**Fix:** use the https:// URL. Behind Caddy or nginx, set `EYESONLY_TRUST_PROXY=1` and make
+sure the proxy sends `X-Forwarded-Proto` ([server-deployment.md](server-deployment.md#behind-a-proxy)).
+
+### `refusing to send an admin token over plain http to <host>`
+
+**Cause:** `eyesonly admin --server http://...` for a host that isn't localhost.
+**Fix:** use https. On a network you fully trust, `--insecure` sends it anyway.
+
+### `only a server admin can do that` / `no such repo` (admin API)
+
+**Cause:** repo admins can change their own repos' policies but can't manage users or create
+repos, and see other repos as missing.
+**Fix:** ask a server admin (`eyesonly-server server-admin list` on the server).
+
+### `audit log FAILED verification at line N`
+
+**Cause:** a line at or before line N was edited, removed or inserted after it was written.
+**Fix:** treat it as an incident: compare with your backups and with the head hash you
+recorded, and find out who had write access to the data directory.
+
 ## Server
 
 ### Every push fails after upgrading Node

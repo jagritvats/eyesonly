@@ -67,6 +67,21 @@ Check the fingerprint with them over another channel. They can print it with
 eyesonly clone https://bob:<token>@git.example.com/app.git
 ```
 
+### From your own machine (admin API)
+
+Every server step in this guide also works remotely with `eyesonly admin`, so you don't need
+a shell on the server ([admin-api.md](admin-api.md)):
+
+```bash
+export EYESONLY_ADMIN_SERVER=https://git.example.com   # token in ~/.eyesonly/admin-token
+eyesonly admin --token-file ~/.eyesonly/admin-token user add eyesonlypub1:eyJuYW1lIjoiYm9iIi...
+eyesonly admin --token-file ~/.eyesonly/admin-token grant bob --repo app.git --files .env
+eyesonly admin --token-file ~/.eyesonly/admin-token sign --repo app.git    # if the policy is signed
+```
+
+Server admins manage users and repos; a repo admin manages that repo's policy. Every change
+lands in the server's audit log with your name.
+
 ## Change who can read a file
 
 Edit the `files` rule (or a group it uses) and `policy set` it. Encryption happens on the

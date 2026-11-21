@@ -145,6 +145,8 @@ pre-commit hook re-seals it for its new path.
 | `eyesonly setup --remote <name>` | Use a remote other than `origin` (remembered) |
 | `EYESONLY_IDENTITY` | Your identity JSON (or base64 of it) from the environment, for CI and containers ([CI guide](docs/ci.md)) |
 | `eyesonly-server init` · `user add` · `user set-key` · `policy set` | Server: bootstrap, users, keys, policy ([deployment](docs/server-deployment.md)) |
+| `eyesonly admin --server <url> ...` | Server, from your machine: users, repos, grant/revoke, re-sign the policy over HTTPS with an admin token ([admin API](docs/admin-api.md)) |
+| `eyesonly-server audit-log [--verify]` | Server: who pushed, fetched, failed to log in or changed what, in a hash-chained log ([deployment](docs/server-deployment.md#audit-log)) |
 
 ## Guides
 
@@ -155,7 +157,8 @@ Also at [jagritvats.github.io/eyesonly/docs](https://jagritvats.github.io/eyeson
 - [Existing repos and clones](docs/existing-repos.md): add Eyes Only to a repo you have, onboard clones
 - [Team workflows](docs/team-workflows.md): grant and revoke access, private branches, offboarding
 - [CI](docs/ci.md): `eyesonly verify` as a required check, reading secrets in CI
-- [Server deployment](docs/server-deployment.md): TLS, systemd, Docker, backups
+- [Server deployment](docs/server-deployment.md): TLS, systemd, Docker, backups, audit log
+- [Admin API](docs/admin-api.md): manage the server from your machine with `eyesonly admin`
 - [Policy reference](docs/policy-reference.md): every policy field
 - [Troubleshooting](docs/troubleshooting.md): error messages and fixes
 
@@ -348,6 +351,9 @@ src/merge.mjs                       merge driver for protected files
 src/refguard.mjs                    protected refs, read-only members, rewind check
 src/attrs.mjs                       info/attributes pinning, filter-redirect check
 src/mirror.mjs                      outbound mirror to GitHub/GitLab
+src/store.mjs                       server state and operations (shared by the admin CLI and API)
+src/admin.mjs, src/admin-client.mjs admin API, admin tokens, login backoff; eyesonly admin
+src/audit.mjs                       hash-chained audit log
 src/server.mjs                      admin CLI, HTTP proxy, pre-receive hook
 action.yml, action/*.sh             GitHub Action: verify (GitHub mode) or clone + decrypt (server)
 test/*.sh                           adversarial suites (npm test runs them all)

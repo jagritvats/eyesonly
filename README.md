@@ -1,5 +1,10 @@
 # Eyes Only
 
+[![npm](https://img.shields.io/npm/v/eyesonly?color=7ee0b5&label=npm)](https://www.npmjs.com/package/eyesonly)
+[![CI](https://github.com/jagritvats/eyesonly/actions/workflows/ci.yml/badge.svg)](https://github.com/jagritvats/eyesonly/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Homebrew](https://img.shields.io/badge/brew-jagritvats%2Ftap%2Feyesonly-orange)](https://github.com/jagritvats/homebrew-tap)
+
 ![Eyes Only: per-person access inside one git repo](https://raw.githubusercontent.com/jagritvats/eyesonly/main/assets/banner.png)
 
 > **Built to be checked.** 450 adversarial end-to-end tests run against a real server, the
@@ -43,7 +48,7 @@ a real server, with an attacker who controls their own git client.
 ## Install
 
 ```bash
-npm i -g eyesonly      # CLIs: eyesonly (also `git eyesonly`) and eyesonly-server
+npm i -g eyesonly      # https://www.npmjs.com/package/eyesonly · CLIs: eyesonly (also `git eyesonly`) and eyesonly-server
 brew install jagritvats/tap/eyesonly   # macOS / Linux, same CLIs
 ```
 

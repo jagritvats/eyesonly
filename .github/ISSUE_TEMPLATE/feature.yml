@@ -1,0 +1,20 @@
+name: Feature request
+description: Something Eyes Only should do
+labels: [feature]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Your workflow, team setup and what you use today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      description: Who could misuse it, and how should the server enforce it?

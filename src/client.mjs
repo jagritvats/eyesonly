@@ -404,8 +404,17 @@ function cmdAudit([user]) {
   for (const [f, n] of exposed) console.log(`  ${f}  (${n} version${n > 1 ? 's' : ''})`);
 }
 
+// The demo is a bash script so it reads like the commands a user would type.
+function cmdDemo() {
+  const script = path.resolve(path.dirname(CLI), '..', 'examples', 'demo.sh');
+  const r = spawnSync('bash', [script], { stdio: 'inherit' });
+  if (r.error) die(`couldn't run the demo (needs bash, git and curl): ${r.error.message}`);
+  process.exit(r.status ?? 1);
+}
+
 const USAGE = `eyesonly: per-user access control for git
 
+  eyesonly demo                run a self-contained local demo (temp dir, two users)
   eyesonly keygen <name>       create your identity (~/.eyesonly/identity.json)
   eyesonly whoami              print your public card
   eyesonly clone <url> [dir]   clone an eyesonly repo and decrypt what you're allowed to read
@@ -420,7 +429,12 @@ internal (wired up by setup): clean %f | smudge %f | textconv <file> | pre-commi
 
 export async function main(argv) {
   const [cmd, ...rest] = argv;
+  if (cmd === '--version' || cmd === 'version') {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(path.dirname(CLI), '..', 'package.json'), 'utf8'));
+    return console.log(pkg.version);
+  }
   const table = {
+    demo: cmdDemo,
     keygen: cmdKeygen,
     whoami: cmdWhoami,
     clone: cmdClone,

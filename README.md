@@ -1,7 +1,11 @@
 # Eyes Only
 
-**Private files, private branches and built-in secrets for git.** Works with the stock
-`git` client. Zero dependencies (Node ≥ 20 + git).
+> **Alpha, not independently audited.** Don't make it the only thing protecting production
+> secrets yet. [Threat model](THREAT_MODEL.md) · [Security policy](SECURITY.md)
+
+**Private files, private branches and built-in secrets in one git repo.** The server
+enforces it, and everyone keeps using the stock `git` client. Zero runtime dependencies
+(Node ≥ 20 + git).
 
 ```
 alice$ cat .env          →  STRIPE_SECRET=sk_live_456
@@ -10,9 +14,35 @@ junior$ git ls-remote    →  main            (private/launch is invisible)
 junior$ git push         →  [eyesonly] REJECTED: 'junior' may not modify protected file '.env'
 ```
 
-- **Plan:** [PLAN.md](PLAN.md). **Threat model:** [THREAT_MODEL.md](THREAT_MODEL.md).
-- **Website:** `site/index.html` (served at `/` by `eyesonly-server serve`).
-- **Proof:** `npm test` runs 436 adversarial end-to-end checks (8 suites) against a real server.
+## Why
+
+Git access is all-or-nothing: whoever can clone a repo sees every file and every branch.
+So `.env` files travel over Slack, the three-person launch branch lives in a separate repo,
+and the contractor fixing a button gets the production keys. Eyes Only adds per-person
+access to files and branches in the same repo, without a new VCS or client.
+
+## Try it in 30 seconds
+
+```bash
+npx eyesonly demo      # temp dir, local server, alice vs junior; needs git, bash and curl
+```
+
+It runs the whole story on your machine: alice reads `.env` and junior gets ciphertext;
+junior can't list, fetch (even by SHA over protocol v2) or push to `private/*`; his
+plaintext push is rejected by the server; and alice's accidental merge of private history
+into `main` is rejected while a squash merge goes through.
+
+Proof beyond the demo: `npm test` runs 436 adversarial end-to-end checks (9 suites) against
+a real server, with an attacker who controls their own git client.
+
+## Install
+
+```bash
+npm i -g eyesonly      # CLIs: eyesonly (also `git eyesonly`) and eyesonly-server
+```
+
+Server in Docker: `docker build -t eyesonly . && docker run -p 8787:8787 -v eyesonly-data:/data eyesonly`.
+Put TLS in front of it either way.
 
 ## Quickstart
 
@@ -151,13 +181,54 @@ eyesonly-server mirror show app.git        # config (credential path only) + wha
    exists (request bodies are capped at 10 MiB, `EYESONLY_MAX_UPLOAD_PACK_BODY` to change).
 3. **Hook** (pre-receive): enforces the server-side policy on every new commit, covering
    plaintext, unauthorized edits, forged/replayed envelopes, stale recipients and private
-   history leaking into public branches.
+   history leaking into public branches. Every object a push makes visible must have been
+   sent by the pusher or already be visible to that ref's audience, so nobody can point a
+   ref at a private commit, tree or blob they only know the SHA of.
+
+**On protocol v2.** Git documents that `transfer.hideRefs` isn't read access control
+([gitnamespaces(7), SECURITY](https://git-scm.com/docs/gitnamespaces#_security)): over
+protocol v2 a client can ask for any object the server has by SHA. It's easy to miss when
+building this kind of proxy. Eyes Only forces v0 with every `allow*SHA1InWant` off and has
+tests for both versions.
+
+## What Eyes Only doesn't do
+
+- **Revocation isn't retroactive.** Someone who could read a secret has seen it.
+  `eyesonly audit <user>` lists exactly what to rotate.
+- **File names, sizes and timestamps are visible** to everyone who can read the branch.
+  Only the contents are protected.
+- **The server can see private branches.** It never sees protected file plaintext, and a
+  signed policy stops it from adding readers, but private refs are ordinary git objects on it.
+- **Admin trust is TOFU** unless you pin the admin key up front (`EYESONLY_PIN_ADMIN`).
+- **Protocol v0 only, plain HTTP.** Put TLS in front of the server.
+- **jj and other git frontends** work for branches, but they don't run git's clean/smudge
+  filters, so encrypted files need the git CLI for now.
+- **Not audited.** See [SECURITY.md](SECURITY.md) to report problems.
+
+## Prior art
+
+| | Encrypted files | Server blocks plaintext / unauthorized writes | Private branches | Stock git client |
+|---|---|---|---|---|
+| **Eyes Only** | ✓ | ✓ | ✓ | ✓ |
+| git-crypt, git-secret, sops, transcrypt, dotenvx | ✓ | — (client-side only) | — | ✓ |
+| Gerrit | — | — | ✓ ref-level Read ACLs | ✓ (but you adopt Gerrit) |
+| Gitolite, Bitbucket | — | — | write-only per branch | ✓ |
+| GitHub / GitLab | — | push protection for known secret patterns | — (requested / designed) | ✓ |
+| [src-control](https://github.com/git-agentic/src-control) | ✓ | ✓ | ✓ | its own `sc` client |
+| [Scrim](https://github.com/Derrickkoko1234/scrim) | planned | push and merge-leak guards; secrets planned | ✓ | ✓ (Postgres-backed server) |
+
+The building blocks aren't new: clean/smudge encryption is git-crypt's idea and ref hiding
+is built into git. The difference is putting the server in charge of both.
 
 ## Layout
 
 ```
 bin/eyesonly.mjs, bin/eyesonly-server.mjs   CLIs
+examples/demo.sh                    the `eyesonly demo` script
 src/crypto.mjs                      envelope format
+src/attest.mjs                      signed policy manifests + admin key pinning
+src/negotiate.mjs                   upload-pack negotiation filter
+src/hooks.mjs                       client pre-commit hook
 src/policy.mjs                      glob / ref / group matching
 src/client.mjs                      filters + developer commands
 src/merge.mjs                       merge driver for protected files
@@ -165,6 +236,6 @@ src/refguard.mjs                    protected refs, read-only members, rewind ch
 src/attrs.mjs                       info/attributes pinning, server filter-redirect check
 src/mirror.mjs                      outbound mirror to GitHub/GitLab
 src/server.mjs                      admin CLI, HTTP proxy, pre-receive hook
-test/e2e.sh                         adversarial suite
+test/*.sh                           adversarial suites (npm test runs them all)
 site/index.html                     landing page
 ```

@@ -1,14 +1,46 @@
 {
   "name": "eyesonly",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Per-user access control for git: private files, private branches, built-in secrets. Works with stock git clients.",
-  "type": "module",
+  "keywords": [
+    "git",
+    "secrets",
+    "access-control",
+    "encryption",
+    "private-branches",
+    "dotenv",
+    "git-crypt"
+  ],
+  "homepage": "https://github.com/jagritvats/eyesonly#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jagritvats/eyesonly.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jagritvats/eyesonly/issues"
+  },
   "license": "MIT",
-  "bin": { "eyesonly": "bin/eyesonly.mjs", "git-eyesonly": "bin/eyesonly.mjs", "eyesonly-server": "bin/eyesonly-server.mjs" },
-  "engines": { "node": ">=20" },
-  "files": ["bin", "src", "site"],
+  "type": "module",
+  "bin": {
+    "eyesonly": "bin/eyesonly.mjs",
+    "git-eyesonly": "bin/eyesonly.mjs",
+    "eyesonly-server": "bin/eyesonly-server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "src",
+    "site",
+    "examples"
+  ],
   "scripts": {
     "test": "bash test/run-all.sh",
-    "serve": "node bin/eyesonly-server.mjs serve"
+    "serve": "node bin/eyesonly-server.mjs serve",
+    "demo": "bash examples/demo.sh"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

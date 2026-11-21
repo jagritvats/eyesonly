@@ -13,16 +13,15 @@
 // Must not import client.mjs (client.mjs imports this file), so the few helpers it
 // needs are duplicated here.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
 import { commonGitDir, checkResolvedFilters } from './attrs.mjs';
+import { identitySource, readIdentity } from './identity.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
-const EYESONLY_HOME = () => process.env.EYESONLY_HOME || path.join(os.homedir(), '.eyesonly');
 
 const MARK_BEGIN = '# >>> eyesonly pre-commit >>>';
 const MARK_END = '# <<< eyesonly pre-commit <<<';
@@ -50,8 +49,12 @@ function loadPolicy() {
 }
 
 function loadIdentity() {
-  const p = path.join(EYESONLY_HOME(), 'identity.json');
-  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
+  try {
+    return readIdentity();
+  } catch (e) {
+    log(e.message);
+    return null;
+  }
 }
 
 function recipientsFor(policy, allowed) {
@@ -230,7 +233,7 @@ export function cmdPreCommit() {
     if (!r.rekey) continue;
     id ??= loadIdentity();
     if (!id) {
-      errors.push(`cannot rekey '${s.path}': no identity at ${path.join(EYESONLY_HOME(), 'identity.json')}. Run: eyesonly keygen <your-name>`);
+      errors.push(`cannot rekey '${s.path}': no usable identity (${identitySource()}). Run: eyesonly keygen <your-name>`);
       continue;
     }
     const sealed = reseal(policy, s.path, r.rekey, allowed, id);

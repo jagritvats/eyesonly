@@ -6,6 +6,12 @@
 - Envelopes record a key id per recipient, so `rekey`, `status` ("needs rekey (new key for bob)"), the pre-commit hook and the server notice a wrap made for an old public key. Before, a recipient whose key changed under the same name kept the old wrap forever. Older envelopes still open; `eyesonly rekey` upgrades them.
 - `eyesonly clone` of an empty repo starts on `main` (protocol v0 can't advertise the unborn branch, so git fell back to `master`).
 - Deploy kit: `deploy/docker-compose.yml` + `deploy/Caddyfile` for automatic HTTPS; the Docker image's data dir is mode 0700.
+- `eyesonly run [--file <path>]... [--no-override] [--] <cmd>`: runs a command with protected dotenv files (default: every `.env` / `.env.*` you can read) loaded into its environment. Values are decrypted from the staged/committed blob with the same signature checks as the smudge filter, never from the working tree; a forged or moved envelope, or an explicit `--file` you can't read, aborts before the command starts. Exit codes and signals pass through.
+- `eyesonly env [--format dotenv|json|shell]`: prints the same variables.
+- `EYESONLY_IDENTITY`: the identity JSON (or base64 of it) from the environment; wins over `$EYESONLY_HOME/identity.json`. Error messages never echo it.
+- GitHub Action (`uses: jagritvats/eyesonly@v0.3`): installs eyesonly, keeps the token in a job-scoped credential helper (never in URLs or git config), clones, and fails if a file the CI user should read stayed encrypted.
+- Docs: separate secrets per environment; CI guide covers the action and `EYESONLY_IDENTITY`.
+- `clone`'s identity-mismatch warning now says which identity files are decrypted as.
 
 ## 0.3.1 (2026-11-22)
 - Fix: `eyesonly setup` in an existing clone now decrypts files for readers. It used to skip files whose stat matched the index (any freshly pulled envelope) and left the index stat stale.

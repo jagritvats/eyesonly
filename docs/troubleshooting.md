@@ -67,6 +67,26 @@ The clone works, but every protected file stays ciphertext.
 **Cause:** the server is down, the URL is wrong, or you're offline.
 **Fix:** check `git remote get-url origin` and that `https://<host>/healthz` answers `ok`.
 
+### `EYESONLY_IDENTITY is set but is neither identity JSON nor base64 of it`
+
+**Cause:** the variable holds something else: a truncated secret, a path, or base64 of the
+wrong file. The message never repeats the value.
+**Fix:** store the whole `identity.json` (or `base64 -w0 identity.json`) in the secret.
+Unset the variable to fall back to `$EYESONLY_HOME/identity.json`.
+
+### `refusing to load '.env': ...` / `you are not a reader of '.env.production'` (eyesonly run)
+
+**Cause:** `eyesonly run` and `eyesonly env` only load files you can decrypt, and stop on any
+envelope that fails verification (bad signer, moved from another path). An explicit
+`--file` you can't read stops everything, and the command doesn't run.
+**Fix:** ask a reader to add you (then they `rekey`), or drop that `--file`. Without
+`--file`, unreadable files are skipped with a note.
+
+### `note: .env has unstaged edits; using the staged version`
+
+**Cause:** `eyesonly run` reads the staged blob, not the working tree.
+**Fix:** `git add .env` to use your edits.
+
 ## Committing
 
 ### `'.env' has filter=eyesonly in .gitattributes but no rule in the policy. Refusing to commit it in plaintext.`

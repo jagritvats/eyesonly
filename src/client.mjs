@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as attest from './attest.mjs';
@@ -8,10 +7,10 @@ import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
 import { installPreCommitHook, cmdPreCommit } from './hooks.mjs';
+import { eyesonlyHome, identityPath, identitySource, readIdentity } from './identity.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
-const EYESONLY_HOME = () => process.env.EYESONLY_HOME || path.join(os.homedir(), '.eyesonly');
-const identityPath = () => path.join(EYESONLY_HOME(), 'identity.json');
+const EYESONLY_HOME = eyesonlyHome;
 
 const log = (...a) => console.error('[eyesonly]', ...a);
 function die(msg) {
@@ -36,16 +35,14 @@ function tryGit(args) {
 // ---------------------------------------------------------------- identity
 
 export function loadIdentity({ required = true } = {}) {
-  const p = identityPath();
-  if (!fs.existsSync(p)) {
-    if (required) die(`no identity at ${p}. Run: eyesonly keygen <your-name>`);
-    return null;
-  }
+  let id;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    id = readIdentity();
   } catch (e) {
-    die(`can't read your identity at ${p}: ${e.message}`);
+    die(e.message);
   }
+  if (!id && required) die(`no identity at ${identityPath()}. Run: eyesonly keygen <your-name> (or set EYESONLY_IDENTITY)`);
+  return id;
 }
 
 function cmdKeygen([name]) {
@@ -286,8 +283,8 @@ async function cmdClone([url, dir]) {
   const resolved = await loadResolved(url, null); // before cloning: a bad policy leaves nothing behind
   const { policy } = resolved;
   const id = loadIdentity({ required: false });
-  if (!id) log(`warning: no identity at ${identityPath()}, so nothing will be decrypted. Run: eyesonly keygen <your-name>`);
-  else if (policy.user !== id.name) log(`warning: server says you are '${policy.user}' but your identity is '${id.name}', so nothing will be decrypted`);
+  if (!id) log(`warning: no identity at ${identitySource()}, so nothing will be decrypted. Run: eyesonly keygen <your-name>`);
+  else if (policy.user !== id.name) log(`warning: server says you are '${policy.user}' but your identity is '${id.name}'; files are decrypted as '${id.name}'`);
   dir = path.resolve(dir || path.basename(new URL(url).pathname).replace(/\.git$/, ''));
   execFileSync('git', ['clone', '--quiet', '--no-checkout', url, dir], { stdio: 'inherit' });
   saveResolved(resolved, path.join(dir, '.git'));
@@ -494,6 +491,12 @@ const USAGE = `eyesonly: per-user access control for git
   eyesonly status              list protected files and whether you can read them
   eyesonly rekey               re-encrypt your readable files for the current policy
   eyesonly audit <user>        list secrets <user> could ever read (rotate them after offboarding)
+  eyesonly run [--file <path>]... [--no-override] [--] <cmd> [args...]
+                               run <cmd> with your protected .env files loaded into its environment
+  eyesonly env [--file <path>]... [--format dotenv|json|shell]
+                               print those variables (writes secrets to stdout)
+
+identity: EYESONLY_IDENTITY (JSON or base64 of it), else $EYESONLY_HOME/identity.json
 
 internal (wired up by setup): clean %f | smudge %f | textconv <file> | pre-commit | merge-file`;
 
@@ -519,6 +522,8 @@ export async function main(argv) {
     textconv: cmdTextconv,
     'pre-commit': cmdPreCommit,
     'merge-file': (a) => import('./merge.mjs').then((m) => m.cmdMergeFile(a)),
+    run: (a) => import('./run.mjs').then((m) => m.cmdRun(a)),
+    env: (a) => import('./run.mjs').then((m) => m.cmdEnv(a)),
   };
   if (!table[cmd]) {
     console.error(USAGE);

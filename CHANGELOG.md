@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Repo mode: Eyes Only without a server. The admin-signed policy lives in `.eyesonly/policy.json` and is read from the default branch only (version-monotonic, admin keys pinned on first use); any git host works. Same commands as server mode; `setup`, `clone` and `pull-policy` detect the mode (an Eyes Only server behind the remote always wins), and a clone never switches modes silently (`--mode` to switch). New: `eyesonly init`, `join`, `grant`, `revoke`, `policy show`. See docs/repo-mode.md.
+- `eyesonly verify` runs the server's content checks over a commit range against the policy in the repo (plus: policy changes must be signed by an earlier admin with a higher version). A pre-push hook runs it in repo-mode clones, and the GitHub Action has `mode: verify` for a required status check (no secrets).
+- The server's pre-receive content checks moved to `src/validate.mjs`, shared with `verify`; behavior unchanged.
 - `eyesonly-server init --admin <card> --repo <name.git>`: one-command bootstrap (admin user, first repo, starter policy with a `core` group for `.env` and `secrets/**` and private branches); prints the token once and the next commands. Refuses to touch an existing user or repo.
 - `eyesonly-server user set-key <card>`: replace a user's keys (lost key, new machine) and keep their token; prints per-repo next steps (rekey, re-sign, re-pin).
 - Envelopes record a key id per recipient, so `rekey`, `status` ("needs rekey (new key for bob)"), the pre-commit hook and the server notice a wrap made for an old public key. Before, a recipient whose key changed under the same name kept the old wrap forever. Older envelopes still open; `eyesonly rekey` upgrades them.

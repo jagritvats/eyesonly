@@ -1,0 +1,20 @@
+# Copy to .github/workflows/eyesonly.yml in a repo-mode repo, then make "eyesonly / verify"
+# a required status check on the default branch (Settings > Rules or Branch protection).
+# It needs no secrets: it reads the checkout and the signed policy in .eyesonly/policy.json.
+name: eyesonly
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # verify needs the base commit of the push or pull request
+      - uses: jagritvats/eyesonly@v0.4
+        with:
+          mode: verify

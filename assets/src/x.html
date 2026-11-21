@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css">
+<style>
+:root { --w: 1600px; --h: 900px; }
+body::after { background: linear-gradient(180deg, rgba(11,13,16,0.9), rgba(11,13,16,0.75)); }
+.wrap { padding: 64px 80px; height: 900px; display: flex; flex-direction: column; }
+.top { display: flex; justify-content: space-between; align-items: baseline; }
+.top .logo { font-size: 34px; }
+.top .k { font: 24px var(--mono); color: var(--dim); }
+.box { position: relative; margin: auto 0; }
+.term pre { font-size: 38px; line-height: 1.75; padding: 34px 44px; }
+.term .bar { padding: 16px 22px; } .term .bar i { width: 16px; height: 16px; } .term .bar span { font-size: 20px; }
+.stamp { right: -18px; bottom: -30px; font-size: 30px; padding: 8px 20px; border-width: 4px; }
+.foot { display: flex; justify-content: space-between; align-items: center; }
+.foot p { font-size: 30px; color: var(--dim); } .foot p b { color: var(--text); font-weight: 600; }
+.foot .pill { font-size: 28px; padding: 14px 24px; }
+</style></head><body><div class="wrap layer">
+<div class="top"><div class="logo">eyesonly<span>.</span></div><div class="k">same repo · same file · stock git</div></div>
+<div class="box">
+  <div class="stamp">EYES ONLY</div>
+  <div class="term"><div class="bar"><i></i><i></i><i></i><span>one repo, two people</span></div>
+<pre><span class="a">alice$</span>  cat .env       <span class="d">→</span> <span class="ok">STRIPE_SECRET=sk_live_456</span>
+<span class="j">junior$</span> cat .env       <span class="d">→</span> <span class="y">EYESONLY-V1 {"keys":…}</span>
+<span class="j">junior$</span> git ls-remote  <span class="d">→</span> main <span class="d">(private/* hidden)</span>
+<span class="j">junior$</span> git push       <span class="d">→</span> <span class="no">REJECTED by server</span></pre></div>
+</div>
+<div class="foot"><p><b>Private files, private branches, built-in secrets.</b><br>Enforced by the server.</p><div class="pill"><b>$</b> npx eyesonly demo</div></div>
+</div></body></html>

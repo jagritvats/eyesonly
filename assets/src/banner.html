@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="base.css">
+<style>
+:root { --w: 1280px; --h: 400px; }
+.wrap { display: grid; grid-template-columns: 1fr 560px; gap: 40px; padding: 44px 56px; height: 400px; align-items: center; }
+h1 { font-size: 48px; margin: 22px 0 16px; }
+.sub { font-size: 19px; margin-bottom: 22px; }
+.right { position: relative; }
+.term pre { font-size: 16px; line-height: 1.7; padding: 16px 20px; }
+.stamp { right: -14px; bottom: -22px; font-size: 18px; }
+</style></head><body><div class="wrap layer">
+<div>
+  <div class="logo">eyesonly<span>.</span></div>
+  <h1>Per-person access <em>inside</em> one git repo.</h1>
+  <p class="sub">Encrypted files, invisible branches, server-side enforcement.</p>
+  <div class="tags"><span>stock git client</span><span>zero dependencies</span><span>self-hosted</span></div>
+</div>
+<div class="right">
+  <div class="stamp">EYES ONLY</div>
+  <div class="term"><div class="bar"><i></i><i></i><i></i><span>alice vs junior</span></div>
+<pre><span class="a">alice$</span>  cat .env       <span class="d">→</span> <span class="ok">STRIPE_SECRET=sk_live_456</span>
+<span class="j">junior$</span> cat .env       <span class="d">→</span> <span class="y">EYESONLY-V1 {"keys":…}</span>
+<span class="j">junior$</span> git ls-remote  <span class="d">→</span> <span class="d">main  (private/* hidden)</span>
+<span class="j">junior$</span> git push       <span class="d">→</span> <span class="no">REJECTED by server</span></pre></div>
+</div>
+</div></body></html>

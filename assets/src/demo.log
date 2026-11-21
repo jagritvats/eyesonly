@@ -1,0 +1,50 @@
+﻿2026-11-21T18:49:14.4072806Z ##[group]Run npm run demo
+[36;1mnpm run demo[0m
+shell: /usr/bin/bash -e {0}
+##[endgroup]
+
+> eyesonly@0.3.0 demo
+> bash examples/demo.sh
+
+
+== Setup: a server, two users, one policy
+  policy: .env readable by @core (alice); refs/heads/private/* visible to @core only
+
+== alice commits code and a secret
+alice$ cat .env
+STRIPE_SECRET=sk_live_51H_demo
+server$ git cat-file blob main:.env | head -c 60
+EYESONLY-V1 {  "v": 1,  "path": ".env",  "signer": "alice", …
+
+== junior clones the same repo
+junior$ cat index.js
+console.log("hello")
+junior$ cat .env | head -c 60
+EYESONLY-V1 {  "v": 1,  "path": ".env",  "signer": "alice", …
+junior$ git status --short
+(clean)
+
+== alice pushes a private branch
+alice$ git ls-remote origin
+789bccdc…	HEAD
+789bccdc…	refs/heads/main
+912c451c…	refs/heads/private/launch
+junior$ git ls-remote origin
+789bccdc…	HEAD
+789bccdc…	refs/heads/main
+junior$ git -c protocol.version=2 fetch origin 912c451c… (he learned the sha somehow)
+error: Server does not allow request for unadvertised object 912c451c6fc27abac2956d064dde1ba4f4f15ff4
+
+== junior tries to get around it
+junior$ echo DB_PASS=oops > .env && git add .env
+[eyesonly] 'junior' is not allowed to write '.env' (allowed: alice)
+junior$ git -c filter.eyesonly.clean=cat commit -am leak && git push   (client filter disabled)
+[eyesonly] REJECTED: 'junior' may not modify protected file '.env' (43a4c051)
+
+== alice merges the private branch into main by mistake
+alice$ git merge private/launch && git push
+[eyesonly] REJECTED: pushing 'refs/heads/main' would expose commit 912c451c from a branch with a narrower audience. Use `git merge --squash`.
+alice$ git merge --squash private/launch && git commit && git push
+accepted: only the squashed content goes public, not the private history
+
+That was the stock git client the whole time. More: README.md, THREAT_MODEL.md, `npm test`.

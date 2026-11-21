@@ -2,6 +2,10 @@
 
 ## Unreleased
 - Identity in the OS keychain: `eyesonly keygen <name> --store keychain` and `eyesonly identity move --to keychain|file` keep the private identity in the macOS Keychain, Windows DPAPI or Linux Secret Service instead of `~/.eyesonly/identity.json`. The key reaches the keychain tools on stdin only; moves are read back and compared before the old copy is removed; the long-running filter reads it once per git command. Also `eyesonly identity show` and `eyesonly identity export --yes` (base64 for `EYESONLY_IDENTITY`). `doctor` warns about a plain-file key. `EYESONLY_IDENTITY` still wins.
+- `eyesonly audit --file <path> [--at <date|rev>] [--all-refs] [--json]`: who could read a file at a given moment, from the recipients (names and key ids) of the envelope version on the default branch (or every ref), plus the commit that introduced it. Follows renames across re-sealed envelopes.
+- `eyesonly audit <user>` now lists each version with first/last dates, takes `--since`/`--until`, and has `--json`.
+- `eyesonly offboard <user>`: revoke (GitHub mode) or print the server steps, re-encrypt what you can read, stage it, and write a rotation checklist with dotenv key names only.
+- `eyesonly rotate <file> KEY=value... | --from-stdin`: set dotenv keys in a protected file, keeping comments and order, and stage it encrypted. Prints key names only.
 
 ## 0.4.0 (2026-11-22)
 - Docs and website lead with GitHub mode (repo mode, no server) and present the server as the upgrade: new guides `docs/github-mode.md` and `docs/choosing-a-mode.md` (including moving from GitHub mode to the server), and both modes covered in existing-repos, CI, team workflows, troubleshooting and the policy reference.

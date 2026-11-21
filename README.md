@@ -139,7 +139,9 @@ pre-commit hook re-seals it for its new path.
 | `eyesonly doctor` | Checks identity, remote, policy, filters and hooks; prints a fix for each problem |
 | `eyesonly pull-policy && eyesonly rekey` | After access changes: refresh the policy and re-encrypt for the new audience |
 | `eyesonly run -- <cmd>` | Run a command with your protected `.env` files as environment variables, decrypted from the committed blobs (`--file .env.production` to pick one; `eyesonly env` prints them) |
-| `eyesonly audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
+| `eyesonly offboard <user>` | Remove someone, re-encrypt, and write a rotation checklist (key names only) |
+| `eyesonly audit <user>` · `audit --file .env --at 2026-03-01` | Every version someone could decrypt; who could read a file on a given date |
+| `eyesonly rotate .env KEY=value` | Set dotenv keys in a protected file and stage it encrypted (`--from-stdin` keeps values out of shell history) |
 | `eyesonly init` · `join` · `grant` · `revoke` · `policy show` | GitHub mode: start, ask for access, give or remove it, see who can read what |
 | `eyesonly verify` | GitHub mode: check commits like the server would (pre-push hook and CI) |
 | `eyesonly setup --remote <name>` | Use a remote other than `origin` (remembered) |
@@ -293,7 +295,8 @@ tests for both versions.
 ## What Eyes Only doesn't do
 
 - **Revocation isn't retroactive.** Someone who could read a secret has seen it.
-  `eyesonly audit <user>` lists exactly what to rotate.
+  `eyesonly offboard <user>` re-encrypts and writes the rotation checklist; `eyesonly audit <user>`
+  lists every version they could decrypt.
 - **File names, sizes and timestamps are visible** to everyone who can read the branch.
   Only the contents are protected.
 - **GitHub mode detects; the server prevents.** Without a server, a plaintext push from

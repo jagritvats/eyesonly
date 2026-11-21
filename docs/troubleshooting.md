@@ -140,6 +140,42 @@ usually because the clone predates the `-text` pin.
 **Fix:** `eyesonly setup`. Smudge and clean undo the conversion either way, so nothing wrong
 gets committed.
 
+### `not a terminal: pass --yes to offboard without a prompt`
+
+**Cause:** `eyesonly offboard` asks before changing the policy, and there's no terminal to ask in
+(CI, a script, or input redirected).
+**Fix:** add `--yes`.
+
+### `<user> is still in the server's policy for <repo>. On the server, an admin runs: ...` (offboard)
+
+**Cause:** in server mode the server holds the policy, so `offboard` can't remove the user itself.
+It has already written the rotation checklist.
+**Fix:** run the printed `eyesonly-server` commands on the server, then `eyesonly offboard <user> --yes`
+again to re-encrypt for the remaining readers.
+
+### `you can't write '.env' (writers: alice, bob)` (rotate)
+
+**Cause:** `eyesonly rotate` only edits files whose audience includes you.
+**Fix:** ask one of the listed people to rotate it, or an admin to grant you the file.
+
+### `` '.env' isn't decrypted in this checkout: run `eyesonly setup` first `` (rotate)
+
+**Cause:** the working copy still holds ciphertext (no identity when it was checked out, or a plain
+`git clone`).
+**Fix:** `eyesonly setup`, then run `rotate` again.
+
+### `argument: expected KEY=value` / `stdin: expected KEY=value` (rotate)
+
+**Cause:** one of the pairs isn't `KEY=value` (key: letters, digits and `_`, not starting with a
+digit). The message never repeats the input, since it may hold a secret.
+**Fix:** check the pairs. With `--from-stdin`, blank lines and `#` comments are skipped.
+
+### `--at: '<x>' is not a date` (audit)
+
+**Cause:** `--at` takes a commit, tag or branch, or a date: `YYYY-MM-DD` (end of that day, UTC),
+an ISO timestamp, or a relative date like `2 weeks ago`.
+**Fix:** use one of those forms. `--all-refs` only works with a date.
+
 ## Committing
 
 ### `` refusing to stage '.env': its ciphertext was edited or isn't valid (...). If you can't read it, restore it with: git checkout -- .env ``

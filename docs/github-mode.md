@@ -94,7 +94,7 @@ A new path also gets a `.gitattributes` line, so commit that file with the polic
 eyesonly revoke carol                              # or: --group core to drop her from one group
 git add .eyesonly && git commit -m "eyesonly: revoke carol"
 eyesonly rekey && git commit -am rekey && git push
-eyesonly audit carol                               # what to rotate
+eyesonly audit carol                               # what to rotate (or do it all: eyesonly offboard carol)
 ```
 
 Revocation isn't retroactive: carol keeps whatever she could already decrypt, including old

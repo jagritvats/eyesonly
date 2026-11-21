@@ -1,10 +1,10 @@
-// Merge driver for protected files: `merge.veil.driver = veil merge-file %O %A %B %P %L`.
+// Merge driver for protected files: `merge.eyesonly.driver = eyesonly merge-file %O %A %B %P %L`.
 //
 // seal() emits a fresh ciphertext every time, so two concurrent edits to `.env` always
 // conflict inside the envelope. This driver:
 //   1. verifies all three sides (signature by an allowed writer, bound to this path),
 //      because re-sealing a forged side under the merger's key would launder it,
-//   2. decrypts them into 0600 temp files under <common git dir>/veil/tmp (removed on
+//   2. decrypts them into 0600 temp files under <common git dir>/eyesonly/tmp (removed on
 //      every path), runs `git merge-file` on the plaintext,
 //   3. clean merge: re-seals for the file's audience, signed by the merger (exit 0);
 //      conflicts: writes plaintext with conflict markers to %A (exit 1), and the user's
@@ -19,7 +19,7 @@ import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
 import { tryOpen, loadPolicy, loadIdentity, recipientsFor } from './client.mjs';
 
-const log = (msg) => console.error('[veil] ' + msg);
+const log = (msg) => console.error('[eyesonly] ' + msg);
 const STALE_MS = 60 * 60 * 1000;
 
 class Refusal extends Error {}
@@ -40,7 +40,7 @@ function openSide(name, blob, P, policy, id) {
   if (!vc.isEnvelope(blob)) {
     // Only an empty base (add/add) is acceptable without an envelope.
     if (name === 'base' && blob.length === 0) return { plaintext: blob };
-    refuse(`${name} is not a veil envelope`);
+    refuse(`${name} is not an eyesonly envelope`);
   }
   const r = tryOpen(blob, P, policy, id);
   if (r.error) refuse(`${name}: ${r.error}`);
@@ -51,7 +51,7 @@ const isBinary = (buf) => buf.subarray(0, 8000).includes(0);
 
 function tmpDir() {
   const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
-  const dir = path.join(common, 'veil', 'tmp');
+  const dir = path.join(common, 'eyesonly', 'tmp');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.chmodSync(dir, 0o700); // mkdir honours umask, and the dir may predate us
   const now = Date.now();
@@ -103,7 +103,7 @@ function mergeFile([O, A, B, P, L]) {
   const id = loadIdentity();
   const dir = tmpDir(); // sweep leftovers from crashed merges on every run
   const allowed = fileRule(policy, P);
-  if (!allowed) refuse(`'${P}' has merge=veil in .gitattributes but no rule in the policy`);
+  if (!allowed) refuse(`'${P}' has merge=eyesonly in .gitattributes but no rule in the policy`);
 
   const sides = { ours: readSide(A), base: readSide(O), theirs: readSide(B) };
   const opened = {};
@@ -137,7 +137,7 @@ function mergeFile([O, A, B, P, L]) {
 export async function cmdMergeFile(args) {
   const P = args[3];
   if (args.length < 4) {
-    log('usage: veil merge-file %O %A %B %P [%L] (wired up by veil setup)');
+    log('usage: eyesonly merge-file %O %A %B %P [%L] (wired up by eyesonly setup)');
     process.exit(2);
   }
   let code;

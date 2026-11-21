@@ -18,7 +18,7 @@ export class NegotiateError extends Error {
     this.status = status;
   }
 }
-const bad = (msg) => new NegotiateError(400, `[veil] ${msg}`);
+const bad = (msg) => new NegotiateError(400, `[eyesonly] ${msg}`);
 
 // ------------------------------------------------------------- pkt-lines
 
@@ -69,7 +69,7 @@ export function classify(payload) {
     if (!m) throw bad(`malformed '${s.split(' ')[0]}' line (expected 40 or 64 lowercase hex digits)`);
     return { kind: 'oid', sha: m[2] };
   }
-  if (s.startsWith('deepen-not ')) throw bad('deepen-not is not supported by veil (it resolves ref names, hidden ones included). Use --depth or --shallow-since.');
+  if (s.startsWith('deepen-not ')) throw bad('deepen-not is not supported by eyesonly (it resolves ref names, hidden ones included). Use --depth or --shallow-since.');
   return { kind: 'pass' };
 }
 
@@ -125,12 +125,12 @@ export async function visibleHaves({ gitDir, shas, hiddenPrefixes = [] }) {
 function decode(body, contentEncoding, maxBytes) {
   const enc = String(contentEncoding || 'identity').trim().toLowerCase();
   if (enc === 'identity' || enc === '') return body;
-  if (enc !== 'gzip' && enc !== 'x-gzip') throw new NegotiateError(400, `[veil] unsupported Content-Encoding '${enc}' (use gzip or none)`);
+  if (enc !== 'gzip' && enc !== 'x-gzip') throw new NegotiateError(400, `[eyesonly] unsupported Content-Encoding '${enc}' (use gzip or none)`);
   try {
     return zlib.gunzipSync(body, { maxOutputLength: maxBytes });
   } catch (e) {
     if (e.code === 'ERR_BUFFER_TOO_LARGE' || e instanceof RangeError) {
-      throw new NegotiateError(413, `[veil] upload-pack request is larger than ${maxBytes} bytes once decompressed`);
+      throw new NegotiateError(413, `[eyesonly] upload-pack request is larger than ${maxBytes} bytes once decompressed`);
     }
     throw bad('upload-pack request body is not valid gzip');
   }
@@ -138,7 +138,7 @@ function decode(body, contentEncoding, maxBytes) {
 
 /** Parses an upload-pack request, drops have/shallow lines for invisible objects, re-serializes it. */
 export async function filterUploadPackBody({ body, contentEncoding, gitDir, hiddenPrefixes = [], maxBytes = DEFAULT_MAX_BODY }) {
-  if (body.length > maxBytes) throw new NegotiateError(413, `[veil] upload-pack request is larger than ${maxBytes} bytes`);
+  if (body.length > maxBytes) throw new NegotiateError(413, `[eyesonly] upload-pack request is larger than ${maxBytes} bytes`);
   const raw = decode(body, contentEncoding, maxBytes);
   if (!raw.length) throw bad('empty upload-pack request');
   const pkts = parsePktLines(raw);

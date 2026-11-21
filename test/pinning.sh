@@ -7,9 +7,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
-export VEIL_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-VEIL="node $ROOT/bin/veil.mjs"
-VS="node $ROOT/bin/veil-server.mjs"
+export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+EYESONLY="node $ROOT/bin/eyesonly.mjs"
+VS="node $ROOT/bin/eyesonly-server.mjs"
 BASE="http://127.0.0.1:$PORT"
 PASS=0 FAIL=0
 
@@ -28,10 +28,10 @@ out_has()     { if grep -q -- "$2" "$SB/out"; then ok "$1"; else bad "$1 (no '$2
 out_lacks()   { if grep -q -- "$2" "$SB/out"; then bad "$1 (found '$2')"; sed 's/^/        /' "$SB/out" | tail -n 8; else ok "$1"; fi; }
 check()       { local d="$1"; shift; if "$@" >"$SB/chk" 2>&1; then ok "$d"; else bad "$d"; sed 's/^/        /' "$SB/chk" | tail -n 8; fi; }
 
-as() { local u="$1"; shift; VEIL_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
+as() { local u="$1"; shift; EYESONLY_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
 url() { echo "http://$1:${TOK[$1]}@127.0.0.1:$PORT/app.git"; }
 in_() { local d="$1"; shift; (cd "$d" && "$@"); }
-is_envelope() { [[ "$(git -C "$1" cat-file blob "$2" | head -c7)" == VEIL-V1 ]]; }
+is_envelope() { [[ "$(git -C "$1" cat-file blob "$2" | head -c11)" == EYESONLY-V1 ]]; }
 # push_commit <user> <dir> <msg>: commit everything staged (hooks bypassed, like an attacker would) and push
 push_commit() { in_ "$2" as "$1" git commit -q --no-verify -m "$3" && in_ "$2" as "$1" git push -q origin HEAD:main; }
 reset_main() { in_ "$2" as "$1" git fetch -q origin && in_ "$2" as "$1" git reset -q --hard origin/main; }
@@ -39,7 +39,7 @@ reset_main() { in_ "$2" as "$1" git fetch -q origin && in_ "$2" as "$1" git rese
 declare -A TOK
 echo "== setup"
 for u in alice bob junior; do
-  card=$(as $u $VEIL keygen $u 2>/dev/null)
+  card=$(as $u $EYESONLY keygen $u 2>/dev/null)
   TOK[$u]=$($VS user add "$card" 2>/dev/null)
 done
 $VS repo create app.git --admin alice 2>/dev/null
@@ -51,33 +51,33 @@ cat > "$SB/policy.json" <<'EOF'
 EOF
 $VS policy set app.git "$SB/policy.json" 2>/dev/null
 $VS policy manifest app.git > "$SB/m.json"
-as alice $VEIL policy-sign "$SB/m.json" > "$SB/s.json" 2>/dev/null
+as alice $EYESONLY policy-sign "$SB/m.json" > "$SB/s.json" 2>/dev/null
 $VS policy attest app.git "$SB/s.json" 2>/dev/null
 $VS serve --port "$PORT" 2>"$SB/server.log" & SRV=$!
 for _ in $(seq 50); do curl -sf "$BASE/healthz" >/dev/null && break; sleep 0.1; done
 
 mkdir -p "$SB/alice" && cd "$SB/alice"
 git init -q -b main && git remote add origin "$(url alice)"
-expect_out "alice sets up (TOFU pins herself as admin)" "pinned admin alice" as alice $VEIL setup
+expect_out "alice sets up (TOFU pins herself as admin)" "pinned admin alice" as alice $EYESONLY setup
 echo 'console.log("hello")' > index.js
 echo 'STRIPE_SECRET=sk_live_123' > .env
 mkdir -p secrets && echo 'db-password' > secrets/db.txt
 as alice git add -A && as alice git commit -qm init
 expect_ok "alice pushes main with secrets" as alice git push -q -u origin main
 
-echo "== client: filter=veil is pinned in .git/info/attributes"
-expect_ok "bob clones" as bob $VEIL clone "$(url bob)" "$SB/bob"
+echo "== client: filter=eyesonly is pinned in .git/info/attributes"
+expect_ok "bob clones" as bob $EYESONLY clone "$(url bob)" "$SB/bob"
 cd "$SB/bob"
-check "info/attributes has the managed block" grep -qF '# >>> veil (managed) >>>' .git/info/attributes
-check "...with '/.env filter=veil diff=veil merge=veil'" grep -qxF '/.env filter=veil diff=veil merge=veil' .git/info/attributes
-check "...and '/secrets/** filter=veil diff=veil merge=veil'" grep -qxF '/secrets/** filter=veil diff=veil merge=veil' .git/info/attributes
+check "info/attributes has the managed block" grep -qF '# >>> eyesonly (managed) >>>' .git/info/attributes
+check "...with '/.env filter=eyesonly diff=eyesonly merge=eyesonly'" grep -qxF '/.env filter=eyesonly diff=eyesonly merge=eyesonly' .git/info/attributes
+check "...and '/secrets/** filter=eyesonly diff=eyesonly merge=eyesonly'" grep -qxF '/secrets/** filter=eyesonly diff=eyesonly merge=eyesonly' .git/info/attributes
 echo '.env filter=lfs' >> .gitattributes
-expect_out "with an in-tree '.env filter=lfs' override, .env still resolves to veil" ".env: filter: veil" git check-attr filter -- .env
+expect_out "with an in-tree '.env filter=lfs' override, .env still resolves to eyesonly" ".env: filter: eyesonly" git check-attr filter -- .env
 git config filter.lfs.clean "cat > '$SB/leak'"   # stand-in for git-lfs: anything it sees, it 'uploads'
 echo 'STRIPE_SECRET=sk_live_bob' > .env
 expect_ok "add + commit with hooks bypassed (core.hooksPath, --no-verify)" \
   as bob bash -c 'git -c core.hooksPath=/dev/null add .env && git commit -q --no-verify -m rotate'
-check "the index holds a VEIL-V1 envelope, not plaintext" is_envelope . :.env
+check "the index holds a EYESONLY-V1 envelope, not plaintext" is_envelope . :.env
 check "the fake LFS filter never saw the plaintext" test ! -e "$SB/leak"
 git config --unset filter.lfs.clean
 reset_main bob "$SB/bob"
@@ -86,23 +86,23 @@ echo "== client: without the pin, pre-commit and status catch the override"
 cp .git/info/attributes "$SB/attrs.saved"
 : > .git/info/attributes
 echo '.env filter=lfs' >> .gitattributes
-expect_out "veil status warns about the redirected filter" "warning: '.env' resolves to filter=lfs; veil requires filter=veil" as bob $VEIL status
+expect_out "eyesonly status warns about the redirected filter" "warning: '.env' resolves to filter=lfs; eyesonly requires filter=eyesonly" as bob $EYESONLY status
 echo 'STRIPE_SECRET=sk_live_plain' > .env
 as bob git add .env
 expect_reject "git commit (hook active) refuses the redirected protected path" "resolves to filter=lfs" as bob git commit -qm leak
 reset_main bob "$SB/bob"
 printf '*.bin binary\r\n# mine\r\n' > .git/info/attributes
-as bob $VEIL pull-policy 2>/dev/null
-as bob $VEIL pull-policy 2>/dev/null
-check "pull-policy restores the block" grep -qxF '/.env filter=veil diff=veil merge=veil' .git/info/attributes
-[[ "$(grep -c '>>> veil (managed)' .git/info/attributes)" == 1 ]] && ok "running it twice leaves exactly one block" || bad "duplicate managed block"
+as bob $EYESONLY pull-policy 2>/dev/null
+as bob $EYESONLY pull-policy 2>/dev/null
+check "pull-policy restores the block" grep -qxF '/.env filter=eyesonly diff=eyesonly merge=eyesonly' .git/info/attributes
+[[ "$(grep -c '>>> eyesonly (managed)' .git/info/attributes)" == 1 ]] && ok "running it twice leaves exactly one block" || bad "duplicate managed block"
 check "the user's own CRLF lines survive byte for byte" grep -q $'^\\*\\.bin binary\r$' .git/info/attributes
 echo '.env filter=lfs' >> .gitattributes
-expect_out ".env resolves to veil again" ".env: filter: veil" git check-attr filter -- .env
+expect_out ".env resolves to eyesonly again" ".env: filter: eyesonly" git check-attr filter -- .env
 as bob git checkout -q -- .gitattributes
 
 echo "== server: .gitattributes redirects on protected paths"
-expect_ok "junior clones" as junior $VEIL clone "$(url junior)" "$SB/junior"
+expect_ok "junior clones" as junior $EYESONLY clone "$(url junior)" "$SB/junior"
 cd "$SB/junior"
 echo '.env filter=lfs' >> .gitattributes && as junior git add .gitattributes
 expect_reject "push appending '.env filter=lfs' is rejected" "sets filter=lfs on protected path '.env'" push_commit junior . lfs
@@ -153,41 +153,41 @@ echo "== worktrees"
 cd "$SB/alice"
 reset_main alice .
 expect_ok "git worktree add in alice's clone" as alice git worktree add -q ../wt -b wt-branch
-out_lacks "...without 'no veil policy cached'" "no veil policy cached"
+out_lacks "...without 'no eyesonly policy cached'" "no eyesonly policy cached"
 expect_out ".env is decrypted in the worktree" "sk_live_123" cat "$SB/wt/.env"
 echo 'STRIPE_SECRET=sk_live_wt' > "$SB/wt/.env"
 expect_ok "editing .env and committing inside the worktree works" in_ "$SB/wt" as alice git commit -qam "rotate in wt"
-out_lacks "...without 'no veil policy cached'" "no veil policy cached"
-check "the committed .env is a VEIL-V1 envelope" is_envelope "$SB/wt" HEAD:.env
+out_lacks "...without 'no eyesonly policy cached'" "no eyesonly policy cached"
+check "the committed .env is a EYESONLY-V1 envelope" is_envelope "$SB/wt" HEAD:.env
 expect_ok "the server accepts the worktree commit" in_ "$SB/wt" as alice git push -q origin wt-branch
-expect_ok "veil pull-policy inside the worktree" in_ "$SB/wt" as alice $VEIL pull-policy
+expect_ok "eyesonly pull-policy inside the worktree" in_ "$SB/wt" as alice $EYESONLY pull-policy
 out_lacks "...reuses the common trust.json (no new TOFU pin)" "pinned admin"
-check "...and creates no worktree-local veil state" test ! -e "$SB/alice/.git/worktrees/wt/veil"
-mkdir -p "$SB/alice/.git/worktrees/wt/veil"
-echo '{"v":1,"signed":true,"admins":{"mallory":"00"},"version":9}' > "$SB/alice/.git/worktrees/wt/veil/trust.json"
-expect_reject "a conflicting worktree trust.json makes veil die" "conflicting veil trust" in_ "$SB/wt" as alice $VEIL status
-expect_reject "...also in pull-policy (never overrides the main repo's pin)" "conflicting veil trust" in_ "$SB/wt" as alice $VEIL pull-policy
-rm -rf "$SB/alice/.git/worktrees/wt/veil"
-# a worktree created by an older veil kept its state in .git/worktrees/<n>/veil
+check "...and creates no worktree-local eyesonly state" test ! -e "$SB/alice/.git/worktrees/wt/eyesonly"
+mkdir -p "$SB/alice/.git/worktrees/wt/eyesonly"
+echo '{"v":1,"signed":true,"admins":{"mallory":"00"},"version":9}' > "$SB/alice/.git/worktrees/wt/eyesonly/trust.json"
+expect_reject "a conflicting worktree trust.json makes eyesonly die" "conflicting eyesonly trust" in_ "$SB/wt" as alice $EYESONLY status
+expect_reject "...also in pull-policy (never overrides the main repo's pin)" "conflicting eyesonly trust" in_ "$SB/wt" as alice $EYESONLY pull-policy
+rm -rf "$SB/alice/.git/worktrees/wt/eyesonly"
+# a worktree created by an older eyesonly kept its state in .git/worktrees/<n>/eyesonly
 git clone -q "$(url alice)" "$SB/plain"
-expect_out "smudge without a policy explains what to do (and passes the envelope through)" "no policy for this checkout. Run \`veil setup\`" \
-  in_ "$SB/plain" bash -c "git cat-file blob HEAD:.env | VEIL_HOME=$SB/home/alice $VEIL smudge .env"
-out_has "...and emits the envelope unchanged" "VEIL-V1"
+expect_out "smudge without a policy explains what to do (and passes the envelope through)" "no policy for this checkout. Run \`eyesonly setup\`" \
+  in_ "$SB/plain" bash -c "git cat-file blob HEAD:.env | EYESONLY_HOME=$SB/home/alice $EYESONLY smudge .env"
+out_has "...and emits the envelope unchanged" "EYESONLY-V1"
 in_ "$SB/plain" git worktree add -q ../wt3 -b wt3 2>/dev/null
-cp -r "$SB/alice/.git/veil" "$SB/plain/.git/worktrees/wt3/veil"
-expect_out "the first veil command migrates worktree-local state" "moved this worktree's veil state" in_ "$SB/wt3" as alice $VEIL status
-check "...into the common git dir" test -f "$SB/plain/.git/veil/policy.json"
-check "...and removes the worktree copy" test ! -e "$SB/plain/.git/worktrees/wt3/veil"
+cp -r "$SB/alice/.git/eyesonly" "$SB/plain/.git/worktrees/wt3/eyesonly"
+expect_out "the first eyesonly command migrates worktree-local state" "moved this worktree's eyesonly state" in_ "$SB/wt3" as alice $EYESONLY status
+check "...into the common git dir" test -f "$SB/plain/.git/eyesonly/policy.json"
+check "...and removes the worktree copy" test ! -e "$SB/plain/.git/worktrees/wt3/eyesonly"
 
 echo "== sparse checkout"
-expect_ok "alice clones again" as alice $VEIL clone "$(url alice)" "$SB/sparse"
+expect_ok "alice clones again" as alice $EYESONLY clone "$(url alice)" "$SB/sparse"
 cd "$SB/sparse"
 as alice git sparse-checkout set --no-cone /index.js
 check "precondition: sparse-checkout removed secrets/ and .env" test ! -e secrets/db.txt -a ! -e .env
-expect_ok "veil setup in the sparse checkout" as alice $VEIL setup
-check "veil setup does not materialize excluded secrets/" test ! -e secrets
+expect_ok "eyesonly setup in the sparse checkout" as alice $EYESONLY setup
+check "eyesonly setup does not materialize excluded secrets/" test ! -e secrets
 check "...nor the excluded .env" test ! -e .env
-expect_out "veil status works in the sparse checkout" "repo app.git" as alice $VEIL status
+expect_out "eyesonly status works in the sparse checkout" "repo app.git" as alice $EYESONLY status
 
 echo
 echo "$PASS passed, $FAIL failed"

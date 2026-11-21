@@ -1,7 +1,7 @@
-# Veil: product plan
+# Eyes Only: product plan
 
 > Git is all-or-nothing: clone access means you get every file and every branch.
-> Veil adds **private files, private branches and built-in secrets** to ordinary git
+> Eyes Only adds **private files, private branches and built-in secrets** to ordinary git
 > repos, and keeps them working with the stock `git` CLI, IDEs and CI.
 
 ## 1. Problem
@@ -56,14 +56,14 @@ Pitch: **"git-crypt, but the server enforces it, plus private branches."**
 
 Shipped in v0.1 and covered by `test/e2e.sh` (47 adversarial checks; 436 across all suites as of v0.3):
 
-- `veil` client: `keygen`, `clone`, `setup`, `pull-policy`, `status`, `rekey`, `audit`,
+- `eyesonly` client: `keygen`, `clone`, `setup`, `pull-policy`, `status`, `rekey`, `audit`,
   plus the clean/smudge/textconv filters (`git diff` shows plaintext to readers and a
   placeholder to everyone else).
 - Crypto: X25519 + HKDF + AES-256-GCM envelopes, path-bound AAD, Ed25519 writer
   signatures. Zero dependencies (Node ≥ 20 and git).
-- `veil-server`: users with hashed bearer tokens, repos, validated JSON policy,
+- `eyesonly-server`: users with hashed bearer tokens, repos, validated JSON policy,
   smart-HTTP proxy with per-user ref hiding, pre-receive enforcement.
-- Landing page (`site/index.html`, also served at `/` by `veil-server serve`).
+- Landing page (`site/index.html`, also served at `/` by `eyesonly-server serve`).
 
 Explicitly **out of MVP**: TLS termination (put Caddy/nginx in front), web UI, SSH
 transport, hosting a GitHub/GitLab-compatible API, SSO, key escrow, partial clone.
@@ -74,16 +74,16 @@ transport, hosting a GitHub/GitLab-compatible API, SSO, key escrow, partial clon
 |---|---|---|
 | **0.1 MVP** (done) | Everything above | 47/47 e2e checks green |
 | **0.2 Trust the client, not the host** (done) | Admin-signed policy + client key pinning (vs. a lying server); have-negotiation oracle closed; pre-commit hook that rekeys on `git mv` / policy change | 200/200 checks across 4 suites |
-| **0.3 Safe in a real team's workflow** (done) | Protected refs + read-only members (no force-push/rewind to a stale secret, admins included); `filter=veil` pinned in `info/attributes` and redirected filters (LFS, nested `.gitattributes`) refused client- and server-side, `git worktree`/sparse-checkout fixed; merge driver that verifies, merges and re-seals encrypted files; outbound mirror to GitHub/GitLab from a sanitized staging repo | 436/436 checks across 9 suites, including post-merge security fixes |
-| **0.3.x Ergonomics** | Long-running filter protocol (`filter.<x>.process`) for speed; reuse SSH ed25519 keys (age-style); `veil grant/revoke` admin API over HTTP | Clone of a 10k-file repo < 2× plain git |
-| **0.4 Hosted mirror** (outbound mirror (manual/cron) shipped; inbound sync next) | Veil sits in front of GitHub/GitLab as a mirror: the private refs and the policy live in Veil, and the public refs are pushed through to GitHub so existing CI and PRs still work | One design partner running prod deploys through it |
+| **0.3 Safe in a real team's workflow** (done) | Protected refs + read-only members (no force-push/rewind to a stale secret, admins included); `filter=eyesonly` pinned in `info/attributes` and redirected filters (LFS, nested `.gitattributes`) refused client- and server-side, `git worktree`/sparse-checkout fixed; merge driver that verifies, merges and re-seals encrypted files; outbound mirror to GitHub/GitLab from a sanitized staging repo | 436/436 checks across 9 suites, including post-merge security fixes |
+| **0.3.x Ergonomics** | Long-running filter protocol (`filter.<x>.process`) for speed; reuse SSH ed25519 keys (age-style); `eyesonly grant/revoke` admin API over HTTP | Clone of a 10k-file repo < 2× plain git |
+| **0.4 Hosted mirror** (outbound mirror (manual/cron) shipped; inbound sync next) | Eyes Only sits in front of GitHub/GitLab as a mirror: the private refs and the policy live in Eyes Only, and the public refs are pushed through to GitHub so existing CI and PRs still work | One design partner running prod deploys through it |
 | **0.5 Teams** | Web dashboard: policy editor, audit log ("who could read STRIPE_KEY on 2026-03-01"), offboarding wizard that runs `audit` and opens rotation tasks | Paid pilot |
 | **1.0** | SSO/SCIM groups → policy groups, hardware keys (WebAuthn PRF), CI identities with short-lived keys, SOC 2 | 10 paying teams |
 
 ## 6. Business model
 
 - **Open source core** (MIT): client, server, hook. Trust requires being able to read the crypto.
-- **Veil Cloud**: hosted proxy/mirror, dashboard, audit log, SSO. $8/dev/month, free ≤ 5 devs.
+- **Eyes Only Cloud**: hosted proxy/mirror, dashboard, audit log, SSO. $8/dev/month, free ≤ 5 devs.
 - **Enterprise**: self-hosted with SSO/SCIM, HSM-backed server keys, support.
 
 ## 7. Go-to-market
@@ -102,6 +102,6 @@ transport, hosting a GitHub/GitLab-compatible API, SSO, key escrow, partial clon
 | Crypto or protocol bug ⇒ loss of trust | Small, readable code; no custom primitives; an external audit before 1.0; adversarial tests in CI |
 | Git upstream changes `hideRefs` / protocol semantics | e2e suite pins behavior on every git release; proxy forces protocol v0 |
 | "Just use separate repos" inertia | Lead with the secrets use case (immediate value), then private branches |
-| Revocation can't be retroactive (they already saw it) | Be upfront about it: `veil audit` lists exactly what to rotate |
+| Revocation can't be retroactive (they already saw it) | Be upfront about it: `eyesonly audit` lists exactly what to rotate |
 
 See [THREAT_MODEL.md](THREAT_MODEL.md) for the adversarial analysis.

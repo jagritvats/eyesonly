@@ -7,13 +7,13 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
-export VEIL_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-VEIL="node $ROOT/bin/veil.mjs"
-VS="node $ROOT/bin/veil-server.mjs"
+export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+EYESONLY="node $ROOT/bin/eyesonly.mjs"
+VS="node $ROOT/bin/eyesonly-server.mjs"
 BASE="http://127.0.0.1:$PORT"
-R="$VEIL_DATA/repos/app.git"
+R="$EYESONLY_DATA/repos/app.git"
 UP="$SB/upstream.git"
-STAGE="$R/veil-mirror-stage.git"
+STAGE="$R/eyesonly-mirror-stage.git"
 PASS=0 FAIL=0
 
 cleanup() { [[ -n "${SRV:-}" ]] && kill "$SRV" 2>/dev/null; rm -rf "$SB"; }
@@ -28,7 +28,7 @@ expect_reject() { local d="$1" pat="$2"; shift 2; if "$@" >"$SB/out" 2>&1; then 
 expect_out()  { local d="$1" pat="$2"; shift 2; if "$@" 2>&1 | grep -q -- "$pat"; then ok "$d"; else bad "$d (no '$pat')"; "$@" 2>&1 | sed 's/^/        /' | tail -n 8; fi; }
 out_has()     { if grep -q -- "$2" "$SB/out"; then ok "$1"; else bad "$1 (no '$2')"; sed 's/^/        /' "$SB/out" | tail -n 8; fi; }
 
-as() { local u="$1"; shift; VEIL_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
+as() { local u="$1"; shift; EYESONLY_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
 url() { echo "http://$1:${TOK[$1]}@127.0.0.1:$PORT/app.git"; }
 up_oid() { git -C "$UP" rev-parse -q --verify "$1" 2>/dev/null || echo none; }
 mirror() { $VS mirror "$@"; }
@@ -49,7 +49,7 @@ inject() {
 declare -A TOK
 echo "== setup"
 for u in alice bob carol junior; do
-  card=$(as $u $VEIL keygen $u 2>/dev/null)
+  card=$(as $u $EYESONLY keygen $u 2>/dev/null)
   TOK[$u]=$($VS user add "$card" 2>/dev/null)
 done
 $VS repo create app.git --admin alice 2>/dev/null
@@ -66,7 +66,7 @@ for _ in $(seq 50); do curl -sf "$BASE/healthz" >/dev/null && break; sleep 0.1; 
 
 mkdir -p "$SB/alice" && cd "$SB/alice"
 git init -q -b main && git remote add origin "$(url alice)"
-as alice $VEIL setup 2>/dev/null
+as alice $EYESONLY setup 2>/dev/null
 echo 'console.log("hello")' > index.js
 echo 'STRIPE_SECRET=sk_live_123' > .env
 as alice git add -A && as alice git commit -qm init
@@ -86,9 +86,9 @@ git init -q --bare "$UP"
 echo "== happy path"
 expect_ok "mirror set (local upstream, main only)" mirror set app.git --url "$UP" --allow-local --push refs/heads/main
 expect_ok "mirror push" mirror push app.git
-[[ "$(up_oid refs/heads/main)" == "$(git -C "$R" rev-parse main)" ]] && ok "upstream main has Veil's main oid" || bad "upstream main oid differs"
-[[ "$(stat -c %a "$R/veil-mirror.json")" == 600 ]] && ok "veil-mirror.json is mode 600" || bad "veil-mirror.json mode $(stat -c %a "$R/veil-mirror.json")"
-[[ "$(stat -c %a "$R/veil-mirror.log")" == 600 ]] && ok "veil-mirror.log is mode 600" || bad "veil-mirror.log mode"
+[[ "$(up_oid refs/heads/main)" == "$(git -C "$R" rev-parse main)" ]] && ok "upstream main has Eyes Only's main oid" || bad "upstream main oid differs"
+[[ "$(stat -c %a "$R/eyesonly-mirror.json")" == 600 ]] && ok "eyesonly-mirror.json is mode 600" || bad "eyesonly-mirror.json mode $(stat -c %a "$R/eyesonly-mirror.json")"
+[[ "$(stat -c %a "$R/eyesonly-mirror.log")" == 600 ]] && ok "eyesonly-mirror.log is mode 600" || bad "eyesonly-mirror.log mode"
 expect_out "a second push is a no-op" "up to date" mirror push app.git
 as alice git tag -a v1.0 -m "v1.0" main && as alice git push -q origin v1.0 2>/dev/null
 mirror set app.git --url "$UP" --allow-local --push refs/heads/main 'refs/tags/v*' 2>/dev/null
@@ -111,7 +111,7 @@ echo "== content injected behind the hook"
 MAIN0=$(git -C "$R" rev-parse main); UP0=$(up_oid refs/heads/main)
 echo 'STRIPE_SECRET=sk_live_PLAINTEXT' > "$SB/plain.env"
 inject "$SB/plain.env"
-expect_reject "plaintext .env committed with plumbing is refused" "is NOT a valid veil envelope (not encrypted" mirror push app.git
+expect_reject "plaintext .env committed with plumbing is refused" "is NOT a valid eyesonly envelope (not encrypted" mirror push app.git
 [[ "$(up_oid refs/heads/main)" == "$UP0" ]] && ok "upstream main unchanged after plaintext refusal" || bad "upstream main moved"
 expect_fail "upstream lacks the plaintext blob" git -C "$UP" cat-file -e "$INJECTED_BLOB"
 expect_fail "staging repo pruned the plaintext blob after the refusal" git -C "$STAGE" cat-file -e "$INJECTED_BLOB"
@@ -124,7 +124,7 @@ const id = JSON.parse(fs.readFileSync(process.argv[2] + "/identity.json"));
 fs.writeFileSync(process.argv[3], vc.seal({ plaintext: Buffer.from("API_URL=https://evil\n"), path: ".env", recipients: { junior: id.x25519.pub }, signer: id }));
 ' "$ROOT" "$SB/home/junior" "$SB/forged.env"
 inject "$SB/forged.env"
-expect_reject "forged envelope signed by junior is refused" "is NOT a valid veil envelope (signer 'junior' may not write" mirror push app.git
+expect_reject "forged envelope signed by junior is refused" "is NOT a valid eyesonly envelope (signer 'junior' may not write" mirror push app.git
 [[ "$(up_oid refs/heads/main)" == "$UP0" ]] && ok "upstream main unchanged after forgery refusal" || bad "upstream main moved"
 git -C "$R" update-ref refs/heads/main "$MAIN0"
 
@@ -170,7 +170,7 @@ expect_reject "a push list is mandatory" "push allowlist is required" mirror set
 expect_reject "'*' only as a trailing glob" "only allowed as a trailing glob" mirror set app.git --url "$UP" --allow-local --push 'refs/heads/*/x'
 expect_ok "https, ssh and scp-like urls are accepted" bash -c "$VS mirror set app.git --url https://github.com/o/r.git --push refs/heads/main && $VS mirror set app.git --url ssh://git@gitlab.com/o/r.git --push refs/heads/main && $VS mirror set app.git --url git@github.com:o/r.git --push refs/heads/main refs/tags/v*"
 mirror set app.git --url "$UP" --allow-local --push refs/heads/main 2>/dev/null
-node -e 'const f=process.argv[1],c=JSON.parse(require("fs").readFileSync(f));c.url="ext::sh -c touch% "+process.argv[2];require("fs").writeFileSync(f,JSON.stringify(c))' "$R/veil-mirror.json" "$SB/pwned2"
+node -e 'const f=process.argv[1],c=JSON.parse(require("fs").readFileSync(f));c.url="ext::sh -c touch% "+process.argv[2];require("fs").writeFileSync(f,JSON.stringify(c))' "$R/eyesonly-mirror.json" "$SB/pwned2"
 expect_reject "hand-edited ext:: config is refused at push time" "transport not allowed: ext" mirror push app.git
 [[ ! -e "$SB/pwned2" ]] && ok "hand-edited ext:: command never ran" || bad "ext:: executed at push"
 mirror set app.git --url "$UP" --allow-local --push refs/heads/main 2>/dev/null
@@ -202,18 +202,18 @@ expect_reject "push to a failing upstream fails" "upstream push failed" env PATH
 grep -q -- "push" "$SB/argv.log" && ok "the git shim saw the push argv" || bad "shim saw no push"
 ! grep -q secret-token-xyz "$SB/argv.log" && ok "token never appears in git argv" || bad "token in argv"
 ! grep -q secret-token-xyz "$SB/out" && ok "token never appears in command output" || bad "token in output"
-! grep -q secret-token-xyz "$R/veil-mirror.json" && ok "token not stored in veil-mirror.json" || bad "token in config"
+! grep -q secret-token-xyz "$R/eyesonly-mirror.json" && ok "token not stored in eyesonly-mirror.json" || bad "token in config"
 expect_out "mirror show prints the credential path" "$SB/cred" mirror show app.git
 expect_fail "mirror show never prints the credential contents" bash -c "$VS mirror show app.git 2>&1 | grep -q secret-token-xyz"
 
 echo "== mirror state is never served over HTTP"
-for p in veil-mirror.json veil-mirror.log "veil-mirror-stage.git/info/refs?service=git-upload-pack" "veil-mirror-stage.git/HEAD"; do
+for p in eyesonly-mirror.json eyesonly-mirror.log "eyesonly-mirror-stage.git/info/refs?service=git-upload-pack" "eyesonly-mirror-stage.git/HEAD"; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' -u "junior:${TOK[junior]}" "$BASE/app.git/$p")
   [[ "$CODE" == 404 ]] && ok "GET /app.git/$p as junior is 404" || bad "/app.git/$p served ($CODE)"
 done
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -u "alice:${TOK[alice]}" "$BASE/app.git/veil-mirror.json")
-[[ "$CODE" == 404 ]] && ok "GET /app.git/veil-mirror.json as admin is 404" || bad "mirror config served to admin ($CODE)"
-expect_fail "policy endpoint doesn't contain mirror config" bash -c "curl -s -u junior:${TOK[junior]} $BASE/app.git/veil/policy | grep -qE 'nope.git|upstream|cred|mirror'"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -u "alice:${TOK[alice]}" "$BASE/app.git/eyesonly-mirror.json")
+[[ "$CODE" == 404 ]] && ok "GET /app.git/eyesonly-mirror.json as admin is 404" || bad "mirror config served to admin ($CODE)"
+expect_fail "policy endpoint doesn't contain mirror config" bash -c "curl -s -u junior:${TOK[junior]} $BASE/app.git/eyesonly/policy | grep -qE 'nope.git|upstream|cred|mirror'"
 
 echo
 echo "$PASS passed, $FAIL failed"

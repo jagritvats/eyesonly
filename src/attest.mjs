@@ -6,11 +6,11 @@
 // a manifest of the file rules and keys with their Ed25519 identity key:
 //
 //   manifest:    { v: 1, repo, version, files: [[glob, [users]], ...], keys: { user: card } }
-//   attestation: { manifest, signer, signer_ed25519, sig = Ed25519("veil-policy-v1\0" + canonical(manifest)) }
+//   attestation: { manifest, signer, signer_ed25519, sig = Ed25519("eyesonly-policy-v1\0" + canonical(manifest)) }
 //
 // `files` is an ordered array because file rules are first-match-wins and canonical
 // JSON sorts object keys. Clients pin the admin key on first contact (TOFU, in
-// .git/veil/trust.json) and refuse unsigned, re-signed, rolled-back or foreign policies.
+// .git/eyesonly/trust.json) and refuse unsigned, re-signed, rolled-back or foreign policies.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import { pubKey, privKey } from './crypto.mjs';
 import { expand } from './policy.mjs';
 
-const DOMAIN = 'veil-policy-v1\0';
+const DOMAIN = 'eyesonly-policy-v1\0';
 const b64 = (b) => Buffer.from(b).toString('base64');
 const sha256hex = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
@@ -81,13 +81,13 @@ function validManifest(m) {
   );
 }
 
-/** The .git/veil/policy.json shape the filters already understand. Insertion order keeps first-match order. */
+/** The .git/eyesonly/policy.json shape the filters already understand. Insertion order keeps first-match order. */
 export function manifestToPolicy(m, user) {
   return { repo: m.repo, user, files: Object.fromEntries(m.files), keys: m.keys };
 }
 
 /**
- * Decide which policy to trust. `raw` is the /veil/policy response, `trust` the pinned
+ * Decide which policy to trust. `raw` is the /eyesonly/policy response, `trust` the pinned
  * state (or null on first contact), `pin` an out-of-band admin fingerprint.
  * Returns { policy, trust, notes }; throws with a user-facing message on any attack.
  */
@@ -128,7 +128,7 @@ export function resolvePolicy(raw, { trust, repoName, pin }) {
   };
 }
 
-const trustPath = (gitDir) => path.join(gitDir, 'veil', 'trust.json');
+const trustPath = (gitDir) => path.join(gitDir, 'eyesonly', 'trust.json');
 
 export function loadTrust(gitDir) {
   const p = trustPath(gitDir);
@@ -144,24 +144,24 @@ export function saveTrust(gitDir, trust) {
 
 // ------------------------------------------------------------- admin (client)
 
-const identityPath = () => path.join(process.env.VEIL_HOME || path.join(os.homedir(), '.veil'), 'identity.json');
+const identityPath = () => path.join(process.env.EYESONLY_HOME || path.join(os.homedir(), '.eyesonly'), 'identity.json');
 
-/** veil policy-sign [file]: sign the output of `veil-server policy manifest`. */
+/** eyesonly policy-sign [file]: sign the output of `eyesonly-server policy manifest`. */
 export function cmdPolicySign([file]) {
   const fail = (msg) => {
-    console.error('[veil]', msg);
+    console.error('[eyesonly]', msg);
     process.exit(1);
   };
   const idp = identityPath();
-  if (!fs.existsSync(idp)) fail(`no identity at ${idp}. Run: veil keygen <your-name>`);
+  if (!fs.existsSync(idp)) fail(`no identity at ${idp}. Run: eyesonly keygen <your-name>`);
   const identity = JSON.parse(fs.readFileSync(idp, 'utf8'));
   let manifest;
   try {
     manifest = JSON.parse(fs.readFileSync(file && file !== '-' ? file : 0, 'utf8'));
   } catch (e) {
-    fail(`can't read manifest: ${e.message}. Usage: veil-server policy manifest <repo> > m.json && veil policy-sign m.json`);
+    fail(`can't read manifest: ${e.message}. Usage: eyesonly-server policy manifest <repo> > m.json && eyesonly policy-sign m.json`);
   }
-  if (!validManifest(manifest)) fail('not a veil policy manifest (expected the output of `veil-server policy manifest <repo>`)');
+  if (!validManifest(manifest)) fail('not an eyesonly policy manifest (expected the output of `eyesonly-server policy manifest <repo>`)');
   console.log(JSON.stringify(signManifest(manifest, identity)));
-  console.error(`[veil] signed ${manifest.repo} policy v${manifest.version} as ${identity.name}. Install it with: veil-server policy attest ${manifest.repo} <this-file>`);
+  console.error(`[eyesonly] signed ${manifest.repo} policy v${manifest.version} as ${identity.name}. Install it with: eyesonly-server policy attest ${manifest.repo} <this-file>`);
 }

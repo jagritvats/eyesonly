@@ -12,14 +12,14 @@ import { filterUploadPackBody, DEFAULT_MAX_BODY } from './negotiate.mjs';
 import * as refguard from './refguard.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SERVER_CLI = path.resolve(HERE, '..', 'bin', 'veil-server.mjs');
+const SERVER_CLI = path.resolve(HERE, '..', 'bin', 'eyesonly-server.mjs');
 const SITE = path.resolve(HERE, '..', 'site');
-const DATA = () => path.resolve(process.env.VEIL_DATA || 'veil-data');
+const DATA = () => path.resolve(process.env.EYESONLY_DATA || 'eyesonly-data');
 const ZERO = '0'.repeat(40);
 const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.git$/;
 
 const die = (msg) => {
-  console.error(`[veil-server] ${msg}`);
+  console.error(`[eyesonly-server] ${msg}`);
   process.exit(1);
 };
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest();
@@ -36,7 +36,7 @@ function saveUsers(users) {
   fs.renameSync(usersFile() + '.tmp', usersFile());
 }
 const repoDir = (name) => path.join(DATA(), 'repos', name);
-const policyFile = (dir) => path.join(dir, 'veil.json');
+const policyFile = (dir) => path.join(dir, 'eyesonly.json');
 function loadPolicy(dir) {
   return JSON.parse(fs.readFileSync(policyFile(dir), 'utf8'));
 }
@@ -60,7 +60,7 @@ function validatePolicy(p) {
 // ------------------------------------------------------------------- admin
 
 function newToken() {
-  return 'veil_' + crypto.randomBytes(24).toString('base64url');
+  return 'eyesonly_' + crypto.randomBytes(24).toString('base64url');
 }
 
 function cmdUser([sub, arg]) {
@@ -83,10 +83,10 @@ function cmdUser([sub, arg]) {
     if (!users[arg]) die(`no such user '${arg}'`);
     delete users[arg];
     saveUsers(users);
-    console.error(`removed ${arg}. Run \`veil audit ${arg}\` in each repo and rotate what it lists.`);
+    console.error(`removed ${arg}. Run \`eyesonly audit ${arg}\` in each repo and rotate what it lists.`);
   } else if (sub === 'list') {
     for (const [n, u] of Object.entries(users)) console.log(`${n}\t${vc.fingerprint({ x25519: u.x25519, ed25519: u.ed25519 })}`);
-  } else die('usage: veil-server user add <veilpub1:...> | token <name> | remove <name> | list');
+  } else die('usage: eyesonly-server user add <eyesonlypub1:...> | token <name> | remove <name> | list');
 }
 
 function installHook(dir) {
@@ -98,7 +98,7 @@ function cmdRepo([sub, name, ...rest]) {
   if (sub === 'create') {
     if (!REPO_RE.test(name || '')) die('repo name must look like name.git');
     const admin = rest[rest.indexOf('--admin') + 1];
-    if (!rest.includes('--admin') || !loadUsers()[admin]) die('usage: veil-server repo create <name.git> --admin <existing-user>');
+    if (!rest.includes('--admin') || !loadUsers()[admin]) die('usage: eyesonly-server repo create <name.git> --admin <existing-user>');
     const dir = repoDir(name);
     if (fs.existsSync(dir)) die('repo exists');
     fs.mkdirSync(path.dirname(dir), { recursive: true });
@@ -111,7 +111,7 @@ function cmdRepo([sub, name, ...rest]) {
   } else if (sub === 'list') {
     const root = path.join(DATA(), 'repos');
     if (fs.existsSync(root)) fs.readdirSync(root).forEach((r) => console.log(r));
-  } else die('usage: veil-server repo create <name.git> --admin <user> | list');
+  } else die('usage: eyesonly-server repo create <name.git> --admin <user> | list');
 }
 
 function cmdPolicy([sub, name, file]) {
@@ -128,7 +128,7 @@ function cmdPolicy([sub, name, file]) {
     }
     fs.writeFileSync(policyFile(dir) + '.tmp', JSON.stringify(p, null, 2));
     fs.renameSync(policyFile(dir) + '.tmp', policyFile(dir));
-    return console.error('policy updated. Members should run `veil pull-policy && veil rekey`.');
+    return console.error('policy updated. Members should run `eyesonly pull-policy && eyesonly rekey`.');
   }
   if (sub === 'manifest') {
     const installed = loadAttestation(dir);
@@ -144,7 +144,7 @@ function cmdPolicy([sub, name, file]) {
     }
     const policy = loadPolicy(dir);
     const users = loadUsers();
-    if (!att?.manifest || typeof att.signer !== 'string') die('not a signed manifest (expected the output of `veil policy-sign`)');
+    if (!att?.manifest || typeof att.signer !== 'string') die('not a signed manifest (expected the output of `eyesonly policy-sign`)');
     if (!expand(policy, policy.admins || [], Object.keys(users)).has(att.signer)) die(`'${att.signer}' is not an admin of ${name}`);
     const u = Object.hasOwn(users, att.signer) ? users[att.signer] : null;
     if (!u || att.signer_ed25519 !== u.ed25519 || !attest.verifyAttestation(att)) {
@@ -153,20 +153,20 @@ function cmdPolicy([sub, name, file]) {
     const installed = loadAttestation(dir);
     const current = attest.buildManifest({ repo: name, policy, users, version: 0 });
     if (attest.manifestContent(att.manifest) !== attest.manifestContent(current)) {
-      die(`signed manifest does not match current policy. Re-run: veil-server policy manifest ${name}`);
+      die(`signed manifest does not match current policy. Re-run: eyesonly-server policy manifest ${name}`);
     }
     const v = att.manifest.version;
     if (att.manifest.v !== 1 || !Number.isInteger(v) || v < 1 || (installed && v <= installed.manifest.version)) {
-      die(`version must increase (installed: ${installed?.manifest.version ?? 'none'}, signed: ${v}). Re-run: veil-server policy manifest ${name}`);
+      die(`version must increase (installed: ${installed?.manifest.version ?? 'none'}, signed: ${v}). Re-run: eyesonly-server policy manifest ${name}`);
     }
     fs.writeFileSync(attestationFile(dir) + '.tmp', JSON.stringify(att, null, 2));
     fs.renameSync(attestationFile(dir) + '.tmp', attestationFile(dir));
-    return console.error(`installed policy v${v} signed by ${att.signer}. Members pick it up with \`veil pull-policy\`.`);
+    return console.error(`installed policy v${v} signed by ${att.signer}. Members pick it up with \`eyesonly pull-policy\`.`);
   }
-  die('usage: veil-server policy show|set <name.git> [file|-] | manifest <name.git> | attest <name.git> <signed.json>');
+  die('usage: eyesonly-server policy show|set <name.git> [file|-] | manifest <name.git> | attest <name.git> <signed.json>');
 }
 
-const attestationFile = (dir) => path.join(dir, 'veil-attestation.json');
+const attestationFile = (dir) => path.join(dir, 'eyesonly-attestation.json');
 function loadAttestation(dir) {
   return fs.existsSync(attestationFile(dir)) ? JSON.parse(fs.readFileSync(attestationFile(dir), 'utf8')) : null;
 }
@@ -211,7 +211,7 @@ const GIT_ROUTES = [
 ];
 
 function handle(req, res, opts) {
-  const url = new URL(req.url, 'http://veil.local');
+  const url = new URL(req.url, 'http://eyesonly.local');
   if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
     const f = path.join(SITE, 'index.html');
     if (fs.existsSync(f)) return send(res, 200, fs.readFileSync(f), { 'content-type': 'text/html; charset=utf-8' });
@@ -225,14 +225,14 @@ function handle(req, res, opts) {
 
   const users = loadUsers();
   const user = authenticate(req, users);
-  if (!user) return send(res, 401, 'authentication required\n', { 'www-authenticate': 'Basic realm="veil"' });
+  if (!user) return send(res, 401, 'authentication required\n', { 'www-authenticate': 'Basic realm="eyesonly"' });
   // Same 404 for "doesn't exist" and "not a member" so repo names don't leak.
   if (!fs.existsSync(policyFile(dir))) return send(res, 404, 'not found\n');
   const policy = loadPolicy(dir);
   const all = Object.keys(users);
   if (!expand(policy, policy.members, all).has(user)) return send(res, 404, 'not found\n');
 
-  if (req.method === 'GET' && rest === '/veil/policy') {
+  if (req.method === 'GET' && rest === '/eyesonly/policy') {
     const view = clientPolicy(repo, policy, users, user);
     const attestation = loadAttestation(dir);
     if (attestation) {
@@ -248,7 +248,7 @@ function handle(req, res, opts) {
   const service = route?.service(url.searchParams);
   if (!route || !['git-upload-pack', 'git-receive-pack'].includes(service)) return send(res, 404, 'not found\n');
   // Early, friendly refusal for read-only members; the pre-receive hook is the real boundary.
-  if (service === 'git-receive-pack' && !refguard.canWrite(policy, user, all)) return send(res, 403, '[veil] read-only access\n');
+  if (service === 'git-receive-pack' && !refguard.canWrite(policy, user, all)) return send(res, 403, '[eyesonly] read-only access\n');
 
   const hidden = Object.entries(policy.branches || {})
     .filter(([, who]) => !expand(policy, who, all).has(user))
@@ -268,8 +268,8 @@ function handle(req, res, opts) {
   const env = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
-    VEIL_DATA: DATA(),
-    VEIL_USER: user,
+    EYESONLY_DATA: DATA(),
+    EYESONLY_USER: user,
     GIT_PROJECT_ROOT: path.join(DATA(), 'repos'),
     GIT_HTTP_EXPORT_ALL: '1',
     REMOTE_USER: user,
@@ -294,9 +294,9 @@ function handle(req, res, opts) {
 
   // Upload-pack: buffer the request and drop have/shallow lines for objects this user
   // can't see, so ACKs don't reveal whether the server holds a private commit.
-  const max = Number(process.env.VEIL_MAX_UPLOAD_PACK_BODY) || DEFAULT_MAX_BODY;
+  const max = Number(process.env.EYESONLY_MAX_UPLOAD_PACK_BODY) || DEFAULT_MAX_BODY;
   const tooBig = () => {
-    send(res, 413, `[veil] upload-pack request is larger than ${max} bytes\n`, { connection: 'close' });
+    send(res, 413, `[eyesonly] upload-pack request is larger than ${max} bytes\n`, { connection: 'close' });
     req.resume(); // discard the rest; never reaches http-backend
   };
   if (Number(req.headers['content-length']) > max) return tooBig();
@@ -322,7 +322,7 @@ function handle(req, res, opts) {
         runBackend(env, res, user, repo, buf);
       })
       .catch((e) => {
-        if (!e.status) console.error(`[veil-server] upload-pack filter failed for ${user}@${repo}:`, e);
+        if (!e.status) console.error(`[eyesonly-server] upload-pack filter failed for ${user}@${repo}:`, e);
         if (!res.headersSent) send(res, e.status || 500, e.status ? `${e.message}\n` : 'internal error\n');
       });
   });
@@ -368,7 +368,7 @@ function handle(req, res, opts) {
 function cmdServe(args) {
   const port = Number(args[args.indexOf('--port') + 1] || process.env.PORT || 8787);
   const host = args.includes('--host') ? args[args.indexOf('--host') + 1] : '127.0.0.1';
-  const opts = { allowV2: process.env.VEIL_ALLOW_PROTOCOL_V2 === '1' };
+  const opts = { allowV2: process.env.EYESONLY_ALLOW_PROTOCOL_V2 === '1' };
   const server = http.createServer((req, res) => {
     try {
       handle(req, res, opts);
@@ -377,23 +377,23 @@ function cmdServe(args) {
       if (!res.headersSent) send(res, 500, 'internal error\n');
     }
   });
-  server.listen(port, host, () => console.error(`[veil-server] listening on http://${host}:${port} (data: ${DATA()})`));
+  server.listen(port, host, () => console.error(`[eyesonly-server] listening on http://${host}:${port} (data: ${DATA()})`));
 }
 
 // ----------------------------------------------------------- pre-receive
 
 function hookPreReceive() {
   const reject = (msg) => {
-    console.error(`\n[veil] REJECTED: ${msg}\n`);
+    console.error(`\n[eyesonly] REJECTED: ${msg}\n`);
     process.exit(1);
   };
   const g = (args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 1 << 30 }).trim();
   const gBuf = (args) => execFileSync('git', args, { maxBuffer: 1 << 30 });
   const lines = (s) => s.split('\n').filter(Boolean);
 
-  const user = process.env.VEIL_USER;
+  const user = process.env.EYESONLY_USER;
   const users = loadUsers();
-  if (!user || !users[user]) reject('push did not come through the veil server (no authenticated user)');
+  if (!user || !users[user]) reject('push did not come through the eyesonly server (no authenticated user)');
   const policy = loadPolicy(process.cwd());
   const all = Object.keys(users);
   const members = expand(policy, policy.members, all);
@@ -429,23 +429,23 @@ function hookPreReceive() {
     const at = `'${file}' in ${commit.slice(0, 8)}`;
     if (entry.type !== 'blob' || entry.mode === '120000') reject(`${at} must be a regular encrypted file`);
     const blob = gBuf(['cat-file', 'blob', entry.oid]);
-    if (!vc.isEnvelope(blob)) reject(`${at} is NOT encrypted. Refusing to store a plaintext secret. Run \`veil setup\` and recommit.`);
+    if (!vc.isEnvelope(blob)) reject(`${at} is NOT encrypted. Refusing to store a plaintext secret. Run \`eyesonly setup\` and recommit.`);
     let env;
     try {
       env = vc.parse(blob);
     } catch (e) {
       reject(`${at}: ${e.message}`);
     }
-    if (env.path !== file) reject(`${at} is encrypted for path '${env.path}'. Run \`veil rekey\` after renaming protected files.`);
+    if (env.path !== file) reject(`${at} is encrypted for path '${env.path}'. Run \`eyesonly rekey\` after renaming protected files.`);
     if (!allowed.has(env.signer) || !users[env.signer] || !vc.verify(env, users[env.signer].ed25519)) {
       reject(`${at} has an invalid signature or its signer '${env.signer}' may not write it`);
     }
     const recips = new Set(Object.keys(env.keys));
     if (!isSubset(recips, allowed)) {
-      reject(`${at} is encrypted to users outside the policy: ${[...recips].filter((r) => !allowed.has(r)).join(', ')}. Run \`veil pull-policy && veil rekey\`.`);
+      reject(`${at} is encrypted to users outside the policy: ${[...recips].filter((r) => !allowed.has(r)).join(', ')}. Run \`eyesonly pull-policy && eyesonly rekey\`.`);
     }
     const missing = [...allowed].filter((u) => !recips.has(u));
-    if (missing.length) console.error(`[veil] note: ${at} is not readable by ${missing.join(', ')} yet (veil rekey)`);
+    if (missing.length) console.error(`[eyesonly] note: ${at} is not readable by ${missing.join(', ')} yet (eyesonly rekey)`);
     validated.add(key);
   };
   const checkCommit = (commit) => {
@@ -546,22 +546,22 @@ function hookPreReceive() {
 
 // ------------------------------------------------------------------- main
 
-const USAGE = `veil-server: auth proxy + policy enforcement for veil repos   (data dir: $VEIL_DATA, default ./veil-data)
+const USAGE = `eyesonly-server: auth proxy + policy enforcement for eyesonly repos   (data dir: $EYESONLY_DATA, default ./eyesonly-data)
 
-  veil-server user add <veilpub1:...>          register a user, prints their access token
-  veil-server user token <name>                rotate a user's token
-  veil-server user remove <name>               offboard a user
-  veil-server user list
-  veil-server repo create <name.git> --admin <user>
-  veil-server repo list
-  veil-server policy show <name.git>
-  veil-server policy set <name.git> <file|->   replace the policy (validated)
-  veil-server policy manifest <name.git>       print the policy manifest for an admin to sign
-  veil-server policy attest <name.git> <signed.json>   install an admin-signed manifest
-  veil-server mirror set <name.git> --url U --push <ref|glob>... [--allow-force] [--delete-upstream on-private] [--credential-file F] [--allow-local]
-  veil-server mirror show <name.git>           print the mirror config (credential path only)
-  veil-server mirror push <name.git>           push verified public refs to the upstream (fails closed)
-  veil-server serve [--port 8787] [--host 127.0.0.1]`;
+  eyesonly-server user add <eyesonlypub1:...>          register a user, prints their access token
+  eyesonly-server user token <name>                rotate a user's token
+  eyesonly-server user remove <name>               offboard a user
+  eyesonly-server user list
+  eyesonly-server repo create <name.git> --admin <user>
+  eyesonly-server repo list
+  eyesonly-server policy show <name.git>
+  eyesonly-server policy set <name.git> <file|->   replace the policy (validated)
+  eyesonly-server policy manifest <name.git>       print the policy manifest for an admin to sign
+  eyesonly-server policy attest <name.git> <signed.json>   install an admin-signed manifest
+  eyesonly-server mirror set <name.git> --url U --push <ref|glob>... [--allow-force] [--delete-upstream on-private] [--credential-file F] [--allow-local]
+  eyesonly-server mirror show <name.git>           print the mirror config (credential path only)
+  eyesonly-server mirror push <name.git>           push verified public refs to the upstream (fails closed)
+  eyesonly-server serve [--port 8787] [--host 127.0.0.1]`;
 
 export async function main([cmd, ...rest]) {
   if (cmd === 'user') return cmdUser(rest);

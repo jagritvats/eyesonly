@@ -1,6 +1,6 @@
 // Policy matching shared by client, server and hook.
 //
-// Server policy (<repo>.git/veil.json):
+// Server policy (<repo>.git/eyesonly.json):
 //   {
 //     "members":  ["*"],                       who may access the repo at all
 //     "admins":   ["alice"],
@@ -9,7 +9,7 @@
 //     "branches": { "refs/heads/private/": ["@core"] }              longest prefix wins
 //   }
 //
-// Client policy (.git/veil/policy.json) is a resolved view served by the
+// Client policy (.git/eyesonly/policy.json) is a resolved view served by the
 // server: { repo, user, files: { glob: [usernames] }, keys: { name: card } }.
 
 export function globToRegex(glob) {

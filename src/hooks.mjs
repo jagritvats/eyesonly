@@ -3,7 +3,7 @@
 // Defense in depth only: the server's pre-receive hook is the security boundary.
 // This hook makes the common cases just work before anything leaves the laptop:
 //   - `git mv` of a protected file re-seals the envelope for its new path,
-//   - a staged envelope with a stale audience (after `veil pull-policy`) is re-sealed,
+//   - a staged envelope with a stale audience (after `eyesonly pull-policy`) is re-sealed,
 //   - plaintext at a protected path (filter bypassed) and moves of ciphertext to an
 //     unprotected path are refused with a message that says what to do.
 //
@@ -21,13 +21,13 @@ import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
 import { commonGitDir, checkResolvedFilters } from './attrs.mjs';
 
-const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'veil.mjs');
-const VEIL_HOME = () => process.env.VEIL_HOME || path.join(os.homedir(), '.veil');
+const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
+const EYESONLY_HOME = () => process.env.EYESONLY_HOME || path.join(os.homedir(), '.eyesonly');
 
-const MARK_BEGIN = '# >>> veil pre-commit >>>';
-const MARK_END = '# <<< veil pre-commit <<<';
+const MARK_BEGIN = '# >>> eyesonly pre-commit >>>';
+const MARK_END = '# <<< eyesonly pre-commit <<<';
 
-const log = (msg) => console.error('[veil] ' + msg);
+const log = (msg) => console.error('[eyesonly] ' + msg);
 
 function git(args, opts = {}) {
   return execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1 << 30, ...opts });
@@ -45,12 +45,12 @@ function tryGitStr(args) {
 const gitDir = () => commonGitDir(); // shared by every git worktree
 
 function loadPolicy() {
-  const p = path.join(gitDir(), 'veil', 'policy.json');
+  const p = path.join(gitDir(), 'eyesonly', 'policy.json');
   return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
 }
 
 function loadIdentity() {
-  const p = path.join(VEIL_HOME(), 'identity.json');
+  const p = path.join(EYESONLY_HOME(), 'identity.json');
   return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
 }
 
@@ -66,16 +66,16 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-function veilBlock() {
+function eyesonlyBlock() {
   return `${MARK_BEGIN}\n${q(process.execPath)} ${q(CLI)} pre-commit || exit 1\n${MARK_END}\n`;
 }
 
-/** Install (or refresh) the veil pre-commit hook, chaining any existing user hook. */
+/** Install (or refresh) the eyesonly pre-commit hook, chaining any existing user hook. */
 export function installPreCommitHook(cwd) {
   const hook = path.resolve(cwd, gitStr(['rev-parse', '--git-path', 'hooks/pre-commit'], { cwd }));
   const dir = path.dirname(hook);
   fs.mkdirSync(dir, { recursive: true });
-  const block = veilBlock();
+  const block = eyesonlyBlock();
 
   if (!fs.existsSync(hook)) {
     fs.writeFileSync(hook, '#!/bin/sh\n' + block, { mode: 0o755 });
@@ -95,10 +95,10 @@ export function installPreCommitHook(cwd) {
   const local = path.join(dir, 'pre-commit.local');
   if (!fs.existsSync(local)) {
     fs.renameSync(hook, local);
-    log(`kept your existing pre-commit hook as ${local}; it still runs before veil's check`);
+    log(`kept your existing pre-commit hook as ${local}; it still runs before eyesonly's check`);
   } else {
-    let bak = path.join(dir, 'pre-commit.veil-bak');
-    for (let n = 1; fs.existsSync(bak); n++) bak = path.join(dir, `pre-commit.veil-bak.${n}`);
+    let bak = path.join(dir, 'pre-commit.eyesonly-bak');
+    for (let n = 1; fs.existsSync(bak); n++) bak = path.join(dir, `pre-commit.eyesonly-bak.${n}`);
     fs.renameSync(hook, bak);
     log(`${local} already exists, so your current pre-commit hook was moved to ${bak}. Merge it into pre-commit.local to keep running it.`);
   }
@@ -144,7 +144,7 @@ function readBlobs(oids) {
 /** Decide what a staged protected blob needs. Returns { ok } | { rekey } | { error }. */
 function inspect(policy, p, blob, allowed) {
   if (!vc.isEnvelope(blob)) {
-    return { error: `plaintext staged for protected path ${p}. Run \`veil setup\` and re-add it (the veil clean filter was bypassed).` };
+    return { error: `plaintext staged for protected path ${p}. Run \`eyesonly setup\` and re-add it (the eyesonly clean filter was bypassed).` };
   }
   let env;
   try {
@@ -177,7 +177,7 @@ function reseal(policy, p, env, allowed, id) {
 
 export function cmdPreCommit() {
   const policy = loadPolicy();
-  if (!policy) return; // veil not set up here: nothing to check
+  if (!policy) return; // eyesonly not set up here: nothing to check
 
   const base = tryGitStr(['rev-parse', '-q', '--verify', 'HEAD']) || gitStr(['hash-object', '-t', 'tree', '/dev/null']);
   const diff = gitStr(['diff', '--cached', '-z', '--name-status', '--no-ext-diff', '-M100%', '--diff-filter=ACMR', base]);
@@ -191,13 +191,13 @@ export function cmdPreCommit() {
     ? gitStr(['ls-files', '-z']).split('\0').filter((p) => p && fileRule(policy, p))
     : [...new Set(entries.map((e) => e.dst).filter((p) => fileRule(policy, p)))];
   for (const r of checkResolvedFilters(probe)) {
-    errors.push(`'${r.path}' resolves to filter=${r.value} (from .gitattributes); veil requires filter=veil. Run \`veil setup\` and remove the override.`);
+    errors.push(`'${r.path}' resolves to filter=${r.value} (from .gitattributes); eyesonly requires filter=eyesonly. Run \`eyesonly setup\` and remove the override.`);
   }
 
   for (const e of entries) {
     if ((e.status === 'R' || e.status === 'C') && fileRule(policy, e.src) && !fileRule(policy, e.dst)) {
       errors.push(
-        `cannot rekey '${e.src}' -> '${e.dst}': '${e.dst}' matches no veil rule, so it would be left as unreadable ` +
+        `cannot rekey '${e.src}' -> '${e.dst}': '${e.dst}' matches no eyesonly rule, so it would be left as unreadable ` +
           `ciphertext at an unprotected path. Rename it to a protected path, or decrypt it and commit the plaintext deliberately.`
       );
     }
@@ -229,7 +229,7 @@ export function cmdPreCommit() {
     if (!r.rekey) continue;
     id ??= loadIdentity();
     if (!id) {
-      errors.push(`cannot rekey '${s.path}': no identity at ${path.join(VEIL_HOME(), 'identity.json')}. Run: veil keygen <your-name>`);
+      errors.push(`cannot rekey '${s.path}': no identity at ${path.join(EYESONLY_HOME(), 'identity.json')}. Run: eyesonly keygen <your-name>`);
       continue;
     }
     const sealed = reseal(policy, s.path, r.rekey, allowed, id);

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Veil: private files, private branches and secrets for git</title>
-<meta name="description" content="Veil adds per-user access control to git: encrypted files, invisible branches and built-in secrets, enforced by the server and compatible with stock git.">
+<title>Eyes Only: private files, private branches and secrets for git</title>
+<meta name="description" content="Eyes Only adds per-user access control to git: encrypted files, invisible branches and built-in secrets, enforced by the server and compatible with stock git.">
 <style>
   :root {
     --bg: #0b0d10; --bg2: #11151a; --line: #1f262e; --text: #e6e9ed; --dim: #8b96a3;
@@ -59,7 +59,7 @@
   td:first-child { color: var(--text); width: 38%; }
   td:nth-child(2) { color: var(--dim); }
   td.res { font: 13px var(--mono); color: var(--accent); white-space: nowrap; }
-  tr.star td:first-child::after { content: " new finding"; font: 11px var(--mono); color: var(--yellow); border: 1px solid var(--yellow); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+  tr.star td:first-child::after { content: " commonly missed"; font: 11px var(--mono); color: var(--yellow); border: 1px solid var(--yellow); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
   .score { display: flex; gap: 32px; margin: 0 0 32px; flex-wrap: wrap; }
   .score div { font: 600 40px var(--mono); letter-spacing: -1px; }
   .score small { display: block; font: 13px var(--sans); color: var(--dim); letter-spacing: 0; }
@@ -88,7 +88,7 @@
 <body>
 <div class="wrap">
   <nav>
-    <div class="logo">veil<span>.</span></div>
+    <div class="logo">eyesonly<span>.</span></div>
     <div class="links">
       <a href="#how">How it works</a><a href="#attacks">Threat model</a><a href="#start">Quickstart</a><a href="#pricing">Pricing</a>
     </div>
@@ -96,14 +96,14 @@
 
   <header>
     <h1>Git, but not <em>all-or-nothing</em>.</h1>
-    <p class="lede">Veil adds private files, private branches and built-in secrets to any git repo.
+    <p class="lede">Eyes Only adds private files, private branches and built-in secrets to any git repo.
       Your <code>.env</code> lives next to the code, encrypted for the people who should read it. The server
       enforces the rules, so nobody can push around them, and everyone keeps using plain <code>git</code>.</p>
     <div class="cta">
       <a class="btn primary" href="#start">Get started</a>
       <a class="btn" href="#attacks">See what we tried to break</a>
     </div>
-    <div class="install">$ <code>npm i -g veil-git</code> · zero dependencies · MIT</div>
+    <div class="install">$ <code>npm i -g eyesonly</code> · zero dependencies · MIT</div>
 
     <div class="split" aria-label="Same repository, two developers">
       <div class="term">
@@ -120,14 +120,14 @@ a1f3…  refs/heads/main
       <div class="term">
         <div class="bar"><b>junior</b><span>contractor</span></div>
 <pre><span class="p">$</span> cat .env
-<span class="y">VEIL-V1 {"path":".env","keys":{"alice":…</span>
+<span class="y">EYESONLY-V1 {"path":".env","keys":{"alice":…</span>
 <span class="p">$</span> git ls-remote origin
 a1f3…  refs/heads/main
 <span class="p">$</span> git fetch origin 9c0e…
 <span class="no">error: Server does not allow request
        for unadvertised object 9c0e…</span>
 <span class="p">$</span> git push   <span class="p"># with plaintext .env</span>
-<span class="no">[veil] REJECTED: 'junior' may not modify
+<span class="no">[eyesonly] REJECTED: 'junior' may not modify
        protected file '.env'</span></pre>
       </div>
     </div>
@@ -135,7 +135,7 @@ a1f3…  refs/heads/main
 
   <section id="how">
     <h2>Three layers, stock git</h2>
-    <p class="sub">A commit hashes its whole tree, so git can't leave a file out for one person. Veil keeps the
+    <p class="sub">A commit hashes its whole tree, so git can't leave a file out for one person. Eyes Only keeps the
       tree identical for everyone and controls who can <em>read</em> the blobs, who can <em>see</em> each ref, and
       what the server will <em>accept</em>.</p>
     <div class="cards">
@@ -158,12 +158,12 @@ a1f3…  refs/heads/main
     <div class="score">
       <div>436<small>adversarial e2e checks</small></div>
       <div>0<small>runtime dependencies</small></div>
-      <div>3<small>holes found in the usual approach</small></div>
+      <div>3<small>common git-proxy footguns we test for</small></div>
     </div>
     <table>
       <thead><tr><th>Attack</th><th>Defense</th><th>Result</th></tr></thead>
       <tbody>
-        <tr class="star"><td>Fetch a hidden private commit by SHA over git protocol v2</td><td>Stock <code>hideRefs</code> doesn't stop v2 wants. Veil strips <code>Git-Protocol</code> and enforces advertised-only wants.</td><td class="res">blocked</td></tr>
+        <tr class="star"><td>Fetch a hidden private commit by SHA over git protocol v2</td><td>Documented but easy to miss: <code>hideRefs</code> doesn't stop v2 wants. Eyes Only strips <code>Git-Protocol</code> and enforces advertised-only wants.</td><td class="res">blocked</td></tr>
         <tr class="star"><td>Download objects over dumb HTTP (<code>/objects/ab/cd…</code>)</td><td>Only the three smart-protocol routes are served; <code>http.getanyfile=false</code>.</td><td class="res">blocked</td></tr>
         <tr class="star"><td>Log in as alice with any password</td><td>192-bit tokens, hashed, constant-time compare, bound to the username.</td><td class="res">blocked</td></tr>
         <tr><td>Bypass the filter and push a plaintext <code>.env</code></td><td>Hook rejects any protected path that isn't a valid envelope.</td><td class="res">rejected</td></tr>
@@ -176,16 +176,16 @@ a1f3…  refs/heads/main
         <tr><td>Grant yourself access by editing the policy</td><td>The policy lives on the server, not in the repo.</td><td class="res">n/a</td></tr>
         <tr><td>Server swaps a teammate's key, rolls the policy back or adds a reader</td><td>Admins sign the policy; clients pin the admin key and accept only signed keys and newer versions.</td><td class="res">refused</td></tr>
         <tr><td>Probe whether a private commit exists with <code>have &lt;sha&gt;</code></td><td>Proxy drops negotiation lines for commits you can't see, so the reply matches a nonexistent SHA.</td><td class="res">no oracle</td></tr>
-        <tr><td>Keep reading after being removed</td><td><code>veil rekey</code> drops you; hook rejects envelopes with stale recipients.</td><td class="res">locked out</td></tr>
+        <tr><td>Keep reading after being removed</td><td><code>eyesonly rekey</code> drops you; hook rejects envelopes with stale recipients.</td><td class="res">locked out</td></tr>
       </tbody>
     </table>
   </section>
 
   <section>
-    <h2>What Veil doesn't do</h2>
+    <h2>What Eyes Only doesn't do</h2>
     <p class="sub">Security tools lose trust by over-claiming, so here are the limits. Details are in <code>THREAT_MODEL.md</code>.</p>
     <div class="limits">
-      <div><b>Revocation isn't retroactive</b><span>Someone who could read a secret has seen it. <code>veil audit &lt;user&gt;</code> lists exactly what to rotate.</span></div>
+      <div><b>Revocation isn't retroactive</b><span>Someone who could read a secret has seen it. <code>eyesonly audit &lt;user&gt;</code> lists exactly what to rotate.</span></div>
       <div><b>File names and timestamps are visible</b><span>Outsiders see that <code>.env</code> exists and when it changed, but not what's in it.</span></div>
       <div><b>The server sees private branches</b><span>It never sees file plaintext, but private refs are ordinary objects on the server.</span></div>
       <div><b>Run it behind TLS</b><span>Tokens are bearer credentials. Put Caddy or nginx in front.</span></div>
@@ -195,7 +195,7 @@ a1f3…  refs/heads/main
   <section>
     <h2>Compared with</h2>
     <table class="compare">
-      <thead><tr><th></th><th>Veil</th><th>git-crypt / sops</th><th>Separate repos</th><th>Vault / Doppler</th></tr></thead>
+      <thead><tr><th></th><th>Eyes Only</th><th>git-crypt / sops</th><th>Separate repos</th><th>Vault / Doppler</th></tr></thead>
       <tbody>
         <tr><td>Secrets versioned with the code</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">no</td></tr>
         <tr><td>Per-file, per-person read access</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td><td class="yes">✓</td></tr>
@@ -211,10 +211,10 @@ a1f3…  refs/heads/main
     <h2>Quickstart</h2>
     <p class="sub">Five minutes on your own box. Production setups put the server behind TLS.</p>
 <div class="code"><span class="p"># server</span>
-veil-server user add veilpub1:eyJuYW1lIjoiYWxpY2Ui…   <span class="p"># prints alice's token</span>
-veil-server repo create app.git --admin alice
-veil-server policy set app.git policy.json
-veil-server serve --port 8787
+eyesonly-server user add eyesonlypub1:eyJuYW1lIjoiYWxpY2Ui…   <span class="p"># prints alice's token</span>
+eyesonly-server repo create app.git --admin alice
+eyesonly-server policy set app.git policy.json
+eyesonly-server serve --port 8787
 
 <span class="p"># policy.json</span>
 { "members":  ["*"],
@@ -223,8 +223,8 @@ veil-server serve --port 8787
   "branches": { "refs/heads/private/": ["@core"] } }
 
 <span class="p"># each developer</span>
-veil keygen alice
-veil clone https://alice:&lt;token&gt;@git.example.com/app.git
+eyesonly keygen alice
+eyesonly clone https://alice:&lt;token&gt;@git.example.com/app.git
 <span class="p"># ...then it's just git</span></div>
   </section>
 
@@ -241,7 +241,7 @@ veil clone https://alice:&lt;token&gt;@git.example.com/app.git
     </div>
   </section>
 
-  <footer>veil. · per-user access control for git · <a href="#attacks">threat model</a> · MIT</footer>
+  <footer>eyesonly. · per-user access control for git · <a href="#attacks">threat model</a> · MIT</footer>
 </div>
 </body>
 </html>

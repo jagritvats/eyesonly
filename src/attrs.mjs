@@ -1,16 +1,16 @@
-// Attribute pinning: keep protected paths on filter=veil no matter what the tree says.
+// Attribute pinning: keep protected paths on filter=eyesonly no matter what the tree says.
 //
-// The veil filter used to be wired only through the in-tree .gitattributes, which any
+// The eyesonly filter used to be wired only through the in-tree .gitattributes, which any
 // member can edit. A later `.env filter=lfs` line or a nested `secrets/.gitattributes`
 // wins over it, and git would hand the plaintext to that other filter (git-lfs uploads
-// it from its pre-push hook, before the veil server sees anything).
+// it from its pre-push hook, before the eyesonly server sees anything).
 //
 // - Client: `$GIT_COMMON_DIR/info/attributes` takes precedence over every in-tree file,
-//   so `pinAttributes` writes the veil lines there, in a managed block.
+//   so `pinAttributes` writes the eyesonly lines there, in a managed block.
 // - Client: `checkResolvedFilters` asks git what a path really resolves to (pre-commit,
-//   veil status).
+//   eyesonly status).
 // - Server: `checkCommitAttributes` refuses commits whose .gitattributes / .lfsconfig
-//   changes would redirect a protected path, for clients that never ran `veil setup`.
+//   changes would redirect a protected path, for clients that never ran `eyesonly setup`.
 //
 // Must not import client.mjs or hooks.mjs (both import this file).
 import fs from 'node:fs';
@@ -18,8 +18,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileRule } from './policy.mjs';
 
-const BEGIN = '# >>> veil (managed) >>>';
-const END = '# <<< veil (managed) <<<';
+const BEGIN = '# >>> eyesonly (managed) >>>';
+const END = '# <<< eyesonly (managed) <<<';
 
 function run(args, opts = {}) {
   return execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 1 << 30, ...opts });
@@ -48,7 +48,7 @@ export function commonGitDir(cwd) {
 
 /**
  * Write `lines` (client attributeLines(policy)) into <common>/info/attributes between the
- * veil markers. Everything outside the block is kept byte for byte (CRLF included). The
+ * eyesonly markers. Everything outside the block is kept byte for byte (CRLF included). The
  * block is rewritten on every call and moved to the end, so it wins over earlier lines and
  * globs removed from the policy disappear.
  */
@@ -67,10 +67,10 @@ export function pinAttributes(lines, gitCommonDir) {
     rest = rest.slice(0, start) + rest.slice(endAt === -1 ? lineEnd(start) : lineEnd(endAt));
   }
   if (rest && !rest.endsWith('\n')) rest += '\n';
-  const block = [BEGIN, '# written by veil from the repo policy; edits inside this block are overwritten', ...lines, END].join('\n') + '\n';
+  const block = [BEGIN, '# written by eyesonly from the repo policy; edits inside this block are overwritten', ...lines, END].join('\n') + '\n';
   const next = rest + block;
   if (fs.existsSync(p) && fs.readFileSync(p, 'utf8') === next) return false;
-  const tmp = `${p}.veil-tmp-${process.pid}`;
+  const tmp = `${p}.eyesonly-tmp-${process.pid}`;
   fs.writeFileSync(tmp, next);
   fs.renameSync(tmp, p);
   return true;
@@ -84,11 +84,11 @@ function parseCheckAttr(out) {
   return res;
 }
 
-/** [{ path, value }] for every path whose resolved filter is not `veil` (value may be 'unspecified', 'unset', 'set', 'lfs', ...). */
+/** [{ path, value }] for every path whose resolved filter is not `eyesonly` (value may be 'unspecified', 'unset', 'set', 'lfs', ...). */
 export function checkResolvedFilters(paths, cwd) {
   if (!paths.length) return [];
   const out = run(['check-attr', '-z', '--stdin', 'filter'], { cwd, input: paths.join('\0') + '\0', stdio: ['pipe', 'pipe', 'pipe'] });
-  return parseCheckAttr(out).filter((r) => r.value !== 'veil');
+  return parseCheckAttr(out).filter((r) => r.value !== 'eyesonly');
 }
 
 // ------------------------------------------------------------------ server
@@ -173,15 +173,15 @@ function checkFilters({ commit, parents, policy, git, reject, attrFiles, extra =
   };
   const now = resolve(commit, list);
   for (const r of now) {
-    if (r.value !== 'veil' && r.value !== 'unspecified') {
-      reject(`commit ${short} sets filter=${r.value} on protected path '${r.path}'. Protected paths must keep filter=veil; remove that .gitattributes line.`);
+    if (r.value !== 'eyesonly' && r.value !== 'unspecified') {
+      reject(`commit ${short} sets filter=${r.value} on protected path '${r.path}'. Protected paths must keep filter=eyesonly; remove that .gitattributes line.`);
     }
   }
-  // `!filter` (back to unspecified) on a path that was filter=veil is a downgrade too.
+  // `!filter` (back to unspecified) on a path that was filter=eyesonly is a downgrade too.
   const unspec = now.filter((r) => r.value === 'unspecified').map((r) => r.path);
   for (const parent of unspec.length ? parents : []) {
     for (const r of resolve(parent, unspec)) {
-      if (r.value === 'veil') reject(`commit ${short} sets filter=unspecified on protected path '${r.path}' (it was filter=veil). Keep the veil line in .gitattributes.`);
+      if (r.value === 'eyesonly') reject(`commit ${short} sets filter=unspecified on protected path '${r.path}' (it was filter=eyesonly). Keep the eyesonly line in .gitattributes.`);
     }
   }
 }

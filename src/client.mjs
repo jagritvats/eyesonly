@@ -9,11 +9,11 @@ import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
 import { installPreCommitHook, cmdPreCommit } from './hooks.mjs';
 
-const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'veil.mjs');
-const VEIL_HOME = () => process.env.VEIL_HOME || path.join(os.homedir(), '.veil');
-const identityPath = () => path.join(VEIL_HOME(), 'identity.json');
+const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
+const EYESONLY_HOME = () => process.env.EYESONLY_HOME || path.join(os.homedir(), '.eyesonly');
+const identityPath = () => path.join(EYESONLY_HOME(), 'identity.json');
 
-const log = (...a) => console.error('[veil]', ...a);
+const log = (...a) => console.error('[eyesonly]', ...a);
 function die(msg) {
   log(msg);
   process.exit(1);
@@ -37,17 +37,17 @@ function tryGit(args) {
 export function loadIdentity({ required = true } = {}) {
   const p = identityPath();
   if (!fs.existsSync(p)) {
-    if (required) die(`no identity at ${p}. Run: veil keygen <your-name>`);
+    if (required) die(`no identity at ${p}. Run: eyesonly keygen <your-name>`);
     return null;
   }
   return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
 
 function cmdKeygen([name]) {
-  if (!name) die('usage: veil keygen <name>');
+  if (!name) die('usage: eyesonly keygen <name>');
   const p = identityPath();
   if (fs.existsSync(p)) die(`identity already exists at ${p} (refusing to overwrite)`);
-  fs.mkdirSync(VEIL_HOME(), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(EYESONLY_HOME(), { recursive: true, mode: 0o700 });
   const id = vc.generateIdentity(name);
   fs.writeFileSync(p, JSON.stringify(id, null, 2), { mode: 0o600 });
   const card = vc.publicCard(id);
@@ -65,30 +65,30 @@ function cmdWhoami() {
 
 // ------------------------------------------------------------------ policy
 
-// Veil state lives in the common git dir, shared by every `git worktree`.
+// Eyes Only state lives in the common git dir, shared by every `git worktree`.
 function gitDir() {
   const { gitDir: own, common } = attrs.gitDirs();
   if (own !== common) migrateWorktreeState(own, common);
   return common;
 }
 
-/** Older veil kept state in .git/worktrees/<n>/veil. Move it once; never let it override the main repo's trust. */
+/** Older eyesonly kept state in .git/worktrees/<n>/eyesonly. Move it once; never let it override the main repo's trust. */
 function migrateWorktreeState(own, common) {
-  const from = path.join(own, 'veil');
-  const to = path.join(common, 'veil');
+  const from = path.join(own, 'eyesonly');
+  const to = path.join(common, 'eyesonly');
   if (!fs.existsSync(from)) return;
   if (!fs.existsSync(to)) {
     fs.renameSync(from, to);
-    return log(`moved this worktree's veil state to ${to} (shared by all worktrees)`);
+    return log(`moved this worktree's eyesonly state to ${to} (shared by all worktrees)`);
   }
   const trust = (d) => (fs.existsSync(path.join(d, 'trust.json')) ? fs.readFileSync(path.join(d, 'trust.json'), 'utf8') : null);
   const mine = trust(from);
   if (mine !== null && mine !== trust(to)) {
-    die(`conflicting veil trust in worktree and main repo; delete one (${from}) after checking which admin key is right`);
+    die(`conflicting eyesonly trust in worktree and main repo; delete one (${from}) after checking which admin key is right`);
   }
   fs.rmSync(from, { recursive: true, force: true });
 }
-const policyPath = (dir = gitDir()) => path.join(dir, 'veil', 'policy.json');
+const policyPath = (dir = gitDir()) => path.join(dir, 'eyesonly', 'policy.json');
 
 export function loadPolicy({ required = true } = {}) {
   let p;
@@ -99,7 +99,7 @@ export function loadPolicy({ required = true } = {}) {
     return null;
   }
   if (!fs.existsSync(p)) {
-    if (required) die('no veil policy cached for this repo. Run: veil setup');
+    if (required) die('no eyesonly policy cached for this repo. Run: eyesonly setup');
     return null;
   }
   return JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -122,12 +122,12 @@ function credentialsFor(url) {
 }
 
 async function fetchPolicy(remoteUrl) {
-  if (!/^https?:\/\//.test(remoteUrl)) die(`veil needs an http(s) remote, got: ${remoteUrl}`);
+  if (!/^https?:\/\//.test(remoteUrl)) die(`eyesonly needs an http(s) remote, got: ${remoteUrl}`);
   const { user, pass } = credentialsFor(remoteUrl);
   const u = new URL(remoteUrl);
   u.username = '';
   u.password = '';
-  u.pathname = u.pathname.replace(/\/+$/, '') + '/veil/policy';
+  u.pathname = u.pathname.replace(/\/+$/, '') + '/eyesonly/policy';
   const res = await fetch(u, { headers: { authorization: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64') } });
   if (!res.ok) die(`policy fetch failed: HTTP ${res.status} ${await res.text()}`);
   return res.json();
@@ -148,10 +148,10 @@ async function loadResolved(remoteUrl, gitDirOrNull) {
     r = attest.resolvePolicy(raw, {
       trust: gitDirOrNull ? attest.loadTrust(gitDirOrNull) : null,
       repoName,
-      pin: process.env.VEIL_PIN_ADMIN,
+      pin: process.env.EYESONLY_PIN_ADMIN,
     });
   } catch (e) {
-    die(`refusing the server's policy: ${e.message}. Nothing was changed; ask your admin (if the admin set really changed, delete .git/veil/trust.json to re-pin).`);
+    die(`refusing the server's policy: ${e.message}. Nothing was changed; ask your admin (if the admin set really changed, delete .git/eyesonly/trust.json to re-pin).`);
   }
   r.notes.forEach((n) => log(n));
   return r;
@@ -167,27 +167,27 @@ function configureFilters(cwd) {
   const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
   const base = `${q(process.execPath)} ${q(CLI)}`;
   const set = (k, v) => git(['config', '--local', k, v], { cwd });
-  set('filter.veil.clean', `${base} clean %f`);
-  set('filter.veil.smudge', `${base} smudge %f`);
-  set('filter.veil.required', 'true');
-  set('diff.veil.textconv', `${base} textconv`);
-  set('diff.veil.cachetextconv', 'false');
-  set('merge.veil.name', 'veil decrypt-merge-reseal');
-  set('merge.veil.driver', `${base} merge-file %O %A %B %P %L`);
+  set('filter.eyesonly.clean', `${base} clean %f`);
+  set('filter.eyesonly.smudge', `${base} smudge %f`);
+  set('filter.eyesonly.required', 'true');
+  set('diff.eyesonly.textconv', `${base} textconv`);
+  set('diff.eyesonly.cachetextconv', 'false');
+  set('merge.eyesonly.name', 'eyesonly decrypt-merge-reseal');
+  set('merge.eyesonly.driver', `${base} merge-file %O %A %B %P %L`);
   installPreCommitHook(cwd);
 }
 
 /** Policy globs are root-anchored; translate them to .gitattributes lines. */
 function attributeLines(policy) {
-  return Object.keys(policy.files || {}).map((g) => `${g.startsWith('**/') ? g : '/' + g} filter=veil diff=veil merge=veil`);
+  return Object.keys(policy.files || {}).map((g) => `${g.startsWith('**/') ? g : '/' + g} filter=eyesonly diff=eyesonly merge=eyesonly`);
 }
 
 function ensureAttributes(policy, cwd) {
   attrs.pinAttributes(attributeLines(policy), attrs.commonGitDir(cwd)); // wins over any in-tree .gitattributes
   const p = path.join(cwd, '.gitattributes');
   const existing = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
-  // Lines written before the merge driver existed lack ` merge=veil`: upgrade them in place.
-  const old = (l) => l.replace(/ merge=veil$/, '');
+  // Lines written before the merge driver existed lack ` merge=eyesonly`: upgrade them in place.
+  const old = (l) => l.replace(/ merge=eyesonly$/, '');
   const want = attributeLines(policy);
   let upgraded = 0;
   const lines = existing.split('\n').map((l) => {
@@ -234,11 +234,11 @@ async function cmdSetup() {
 async function cmdPullPolicy() {
   const remote = gitStr(['config', 'remote.origin.url']);
   saveResolved(await loadResolved(remote, gitDir()));
-  log('policy updated. Run `veil rekey` if file access changed.');
+  log('policy updated. Run `eyesonly rekey` if file access changed.');
 }
 
 async function cmdClone([url, dir]) {
-  if (!url) die('usage: veil clone <url> [dir]');
+  if (!url) die('usage: eyesonly clone <url> [dir]');
   const resolved = await loadResolved(url, null); // before cloning: a bad policy leaves nothing behind
   const { policy } = resolved;
   dir = path.resolve(dir || path.basename(new URL(url).pathname).replace(/\.git$/, ''));
@@ -268,7 +268,7 @@ function cmdClean([file]) {
 
   const policy = loadPolicy();
   const allowed = fileRule(policy, file);
-  if (!allowed) die(`'${file}' has filter=veil in .gitattributes but no rule in the policy. Refusing to commit it in plaintext.`);
+  if (!allowed) die(`'${file}' has filter=eyesonly in .gitattributes but no rule in the policy. Refusing to commit it in plaintext.`);
   const id = loadIdentity();
   if (!allowed.includes(id.name)) die(`'${id.name}' is not allowed to write '${file}' (allowed: ${allowed.join(', ')})`);
 
@@ -302,7 +302,7 @@ export function tryOpen(blob, file, policy, id) {
   } catch (e) {
     return { error: e.message };
   }
-  if (file && env.path !== file) return { error: `envelope is bound to '${env.path}', not '${file}' (run veil rekey)` };
+  if (file && env.path !== file) return { error: `envelope is bound to '${env.path}', not '${file}' (run eyesonly rekey)` };
   const allowed = policy ? fileRule(policy, env.path) || [] : [];
   const signer = policy?.keys?.[env.signer];
   if (!signer || !vc.verify(env, signer.ed25519)) return { env, error: `bad or unknown signature (signer '${env.signer}')` };
@@ -322,7 +322,7 @@ function cmdSmudge([file]) {
   // A smudge failure would abort checkout (filter is required), so always emit something.
   const policy = loadPolicy({ required: false });
   if (!policy) {
-    log('no policy for this checkout. Run `veil setup`');
+    log('no policy for this checkout. Run `eyesonly setup`');
     return void process.stdout.write(input);
   }
   const r = tryOpen(input, file, policy, loadIdentity({ required: false }));
@@ -336,7 +336,7 @@ function cmdTextconv([file]) {
   const r = tryOpen(input, null, loadPolicy({ required: false }), loadIdentity({ required: false }));
   if (r.plaintext) return void process.stdout.write(r.plaintext);
   const who = r.env ? Object.keys(r.env.keys).join(', ') : '?';
-  process.stdout.write(`[veil: encrypted, readable by ${who}${r.error ? `; ${r.error}` : ''}]\n`);
+  process.stdout.write(`[eyesonly: encrypted, readable by ${who}${r.error ? `; ${r.error}` : ''}]\n`);
 }
 
 // ------------------------------------------------------------ team commands
@@ -361,7 +361,7 @@ function cmdStatus() {
     console.log(`  ${state.padEnd(9)} ${f}  [${allowed.join(', ')}]${note}`);
   }
   for (const r of attrs.checkResolvedFilters(protectedFiles(policy, top), top)) {
-    console.log(`warning: '${r.path}' resolves to filter=${r.value}; veil requires filter=veil`);
+    console.log(`warning: '${r.path}' resolves to filter=${r.value}; eyesonly requires filter=eyesonly`);
   }
 }
 
@@ -379,7 +379,7 @@ function cmdRekey() {
 }
 
 function cmdAudit([user]) {
-  if (!user) die('usage: veil audit <user>');
+  if (!user) die('usage: eyesonly audit <user>');
   const policy = loadPolicy();
   const seen = new Set();
   const exposed = new Map();
@@ -404,17 +404,17 @@ function cmdAudit([user]) {
   for (const [f, n] of exposed) console.log(`  ${f}  (${n} version${n > 1 ? 's' : ''})`);
 }
 
-const USAGE = `veil: per-user access control for git
+const USAGE = `eyesonly: per-user access control for git
 
-  veil keygen <name>       create your identity (~/.veil/identity.json)
-  veil whoami              print your public card
-  veil clone <url> [dir]   clone a veil repo and decrypt what you're allowed to read
-  veil setup               enable veil in an existing clone
-  veil pull-policy         refresh the cached access policy from the server
-  veil policy-sign <file>  (admin) sign a policy manifest from veil-server policy manifest
-  veil status              list protected files and whether you can read them
-  veil rekey               re-encrypt your readable files for the current policy
-  veil audit <user>        list secrets <user> could ever read (rotate them after offboarding)
+  eyesonly keygen <name>       create your identity (~/.eyesonly/identity.json)
+  eyesonly whoami              print your public card
+  eyesonly clone <url> [dir]   clone an eyesonly repo and decrypt what you're allowed to read
+  eyesonly setup               enable eyesonly in an existing clone
+  eyesonly pull-policy         refresh the cached access policy from the server
+  eyesonly policy-sign <file>  (admin) sign a policy manifest from eyesonly-server policy manifest
+  eyesonly status              list protected files and whether you can read them
+  eyesonly rekey               re-encrypt your readable files for the current policy
+  eyesonly audit <user>        list secrets <user> could ever read (rotate them after offboarding)
 
 internal (wired up by setup): clean %f | smudge %f | textconv <file> | pre-commit | merge-file`;
 

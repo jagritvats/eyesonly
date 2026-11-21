@@ -7,11 +7,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
-export VEIL_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-VEIL="node $ROOT/bin/veil.mjs"
-VS="node $ROOT/bin/veil-server.mjs"
+export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+EYESONLY="node $ROOT/bin/eyesonly.mjs"
+VS="node $ROOT/bin/eyesonly-server.mjs"
 BASE="http://127.0.0.1:$PORT"
-BARE="$VEIL_DATA/repos/app.git"
+BARE="$EYESONLY_DATA/repos/app.git"
 ZERO=0000000000000000000000000000000000000000
 PASS=0 FAIL=0
 
@@ -25,7 +25,7 @@ expect_fail() { local d="$1"; shift; if "$@" >"$SB/out" 2>&1; then bad "$d (unex
 expect_reject() { local d="$1" pat="$2"; shift 2; if "$@" >"$SB/out" 2>&1; then bad "$d (unexpectedly succeeded)"; elif grep -q -- "$pat" "$SB/out"; then ok "$d"; else bad "$d (failed, but without '$pat')"; sed 's/^/        /' "$SB/out" | tail -n 8; fi; }
 expect_out()  { local d="$1" pat="$2"; shift 2; if "$@" 2>&1 | grep -q -- "$pat"; then ok "$d"; else bad "$d (no '$pat')"; "$@" 2>&1 | sed 's/^/        /' | tail -n 8; fi; }
 
-as() { local u="$1"; shift; VEIL_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
+as() { local u="$1"; shift; EYESONLY_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
 url() { echo "http://$1:${TOK[$1]}@127.0.0.1:$PORT/app.git"; }
 in_() { local d="$1"; shift; (cd "$d" && "$@"); }
 srv_ref() { git --git-dir="$BARE" rev-parse "$1"; }
@@ -41,12 +41,12 @@ EOF
   $VS policy set app.git "$SB/policy.json" 2>/dev/null
 }
 # hook_as <user> <old> <new> <ref>: run the pre-receive hook directly (proxy bypassed)
-hook_as() { (cd "$BARE" && printf '%s %s %s\n' "$2" "$3" "$4" | VEIL_USER="$1" ./hooks/pre-receive); }
+hook_as() { (cd "$BARE" && printf '%s %s %s\n' "$2" "$3" "$4" | EYESONLY_USER="$1" ./hooks/pre-receive); }
 
 declare -A TOK
 echo "== setup"
 for u in alice bob carol junior; do
-  card=$(as $u $VEIL keygen $u 2>/dev/null)
+  card=$(as $u $EYESONLY keygen $u 2>/dev/null)
   TOK[$u]=$($VS user add "$card" 2>/dev/null)
 done
 $VS repo create app.git --admin alice 2>/dev/null
@@ -56,7 +56,7 @@ for _ in $(seq 50); do curl -sf "$BASE/healthz" >/dev/null && break; sleep 0.1; 
 
 mkdir -p "$SB/alice" && cd "$SB/alice"
 git init -q -b main && git remote add origin "$(url alice)"
-as alice $VEIL setup 2>/dev/null
+as alice $EYESONLY setup 2>/dev/null
 echo 'console.log("hello")' > index.js
 echo 'STRIPE_SECRET=sk_live_123' > .env
 as alice git add -A && as alice git commit -qm init
@@ -64,7 +64,7 @@ expect_ok "alice pushes main" as alice git push -q -u origin main
 as alice git tag v1 && expect_ok "alice pushes tag v1" as alice git push -q origin v1
 
 echo "== baseline (no writers, no protect)"
-expect_ok "bob clones" as bob $VEIL clone "$(url bob)" "$SB/bob"
+expect_ok "bob clones" as bob $EYESONLY clone "$(url bob)" "$SB/bob"
 in_ "$SB/bob" bash -c 'echo "STRIPE_SECRET=sk_live_456" > .env && echo v2 >> index.js'
 in_ "$SB/bob" as bob git commit -qam "rotate stripe" >/dev/null
 expect_ok "bob fast-forwards main" in_ "$SB/bob" as bob git push -q
@@ -74,7 +74,7 @@ expect_ok "bob creates his feature branch" in_ "$SB/bob" as bob git push -q orig
 expect_ok "bob force-pushes his (unprotected) feature branch" in_ "$SB/bob" as bob git push -q -f origin feature/bob~1:feature/bob
 expect_ok "bob deletes his feature branch" in_ "$SB/bob" as bob git push -q origin --delete feature/bob
 in_ "$SB/bob" as bob git checkout -q main
-expect_ok "junior clones" as junior $VEIL clone "$(url junior)" "$SB/junior"
+expect_ok "junior clones" as junior $EYESONLY clone "$(url junior)" "$SB/junior"
 in_ "$SB/junior" as junior git checkout -q -b feature/j
 in_ "$SB/junior" bash -c 'echo junior > junior.txt' && in_ "$SB/junior" as junior git add junior.txt && in_ "$SB/junior" as junior git commit -qm junior
 expect_ok "junior pushes a feature branch" in_ "$SB/junior" as junior git push -q origin feature/j
@@ -84,8 +84,8 @@ echo "== revoke carol, alice rekeys"
 in_ "$SB/alice" as alice git pull -q --rebase >/dev/null 2>&1
 PRE=$(in_ "$SB/alice" git rev-parse HEAD)   # last commit with .env still encrypted to carol
 REVOKED=1 policy
-in_ "$SB/alice" as alice $VEIL pull-policy 2>/dev/null
-in_ "$SB/alice" as alice $VEIL rekey 2>/dev/null
+in_ "$SB/alice" as alice $EYESONLY pull-policy 2>/dev/null
+in_ "$SB/alice" as alice $EYESONLY rekey 2>/dev/null
 in_ "$SB/alice" as alice git commit -qm "rekey: remove carol" >/dev/null
 expect_ok "alice pushes the rekeyed .env" in_ "$SB/alice" as alice git push -q
 REKEYED=$(srv_ref main)
@@ -100,11 +100,11 @@ expect_reject "alice (admin) force-pushes main back to the pre-rekey commit (con
 expect_reject "creating a new branch at the pre-rekey commit is rejected too" "outside the policy: carol" \
   in_ "$SB/junior" as junior git push -q origin "$PRE:refs/heads/old"
 in_ "$SB/alice" as alice git reset -q --hard "$PRE"
-in_ "$SB/alice" as alice $VEIL rekey 2>/dev/null
+in_ "$SB/alice" as alice $EYESONLY rekey 2>/dev/null
 in_ "$SB/alice" as alice git commit -qm "rekey (rewritten)" >/dev/null
 expect_ok "alice force-pushes a rewritten main with a current-policy .env" in_ "$SB/alice" as alice git push -q -f origin main
 in_ "$SB/bob" as bob git pull -q --rebase >/dev/null 2>&1
-in_ "$SB/bob" as bob $VEIL pull-policy 2>/dev/null
+in_ "$SB/bob" as bob $EYESONLY pull-policy 2>/dev/null
 
 echo "== deletion and tags"
 in_ "$SB/junior" as junior git fetch -q -f --tags 2>/dev/null
@@ -147,11 +147,11 @@ expect_ok "alice (in the delete list) deletes private/x" in_ "$SB/alice" as alic
 
 echo "== read-only members (writers)"
 REVOKED=1 policy '"writers": ["@core"]'
-expect_ok "read-only junior can still clone" as junior $VEIL clone "$(url junior)" "$SB/junior2"
+expect_ok "read-only junior can still clone" as junior $EYESONLY clone "$(url junior)" "$SB/junior2"
 expect_ok "read-only junior can still fetch" in_ "$SB/junior" as junior git fetch -q
 in_ "$SB/junior" as junior git checkout -q -b feature/ro
 expect_reject "proxy refuses junior's git push (403)" "403" in_ "$SB/junior" as junior git push origin feature/ro
-expect_out "proxy says why: read-only access" "\[veil\] read-only access" \
+expect_out "proxy says why: read-only access" "\[eyesonly\] read-only access" \
   curl -s -u "junior:${TOK[junior]}" "$BASE/app.git/info/refs?service=git-receive-pack"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -u "junior:${TOK[junior]}" -X POST "$BASE/app.git/git-receive-pack")
 [[ "$CODE" == 403 ]] && ok "POST git-receive-pack as read-only junior is 403" || bad "receive-pack POST ($CODE)"
@@ -169,7 +169,7 @@ expect_reject "writers that isn't a list is refused" "writers must be a list" ba
 
 echo "== policy endpoint"
 REVOKED=1 policy '"writers": ["@core"], "protect": { "refs/heads/private/launch": { "push": ["@core"] } }'
-curl -s -u "junior:${TOK[junior]}" "$BASE/app.git/veil/policy" > "$SB/view.json"
+curl -s -u "junior:${TOK[junior]}" "$BASE/app.git/eyesonly/policy" > "$SB/view.json"
 expect_fail "policy view does not mention protect" grep -q protect "$SB/view.json"
 expect_fail "policy view does not mention writers" grep -q writers "$SB/view.json"
 expect_fail "policy view does not leak the private ref prefix" grep -q "private" "$SB/view.json"

@@ -11,9 +11,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
-export VEIL_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-VEIL="node $ROOT/bin/veil.mjs"
-VS="node $ROOT/bin/veil-server.mjs"
+export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+EYESONLY="node $ROOT/bin/eyesonly.mjs"
+VS="node $ROOT/bin/eyesonly-server.mjs"
 BASE="http://127.0.0.1:$PORT"
 ZERO=0000000000000000000000000000000000000000
 PASS=0 FAIL=0
@@ -25,7 +25,7 @@ ok()  { echo "  PASS  $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 expect_ok()     { local d="$1"; shift; if "$@" >"$SB/out" 2>&1; then ok "$d"; else bad "$d"; sed 's/^/        /' "$SB/out" | tail -n 12; fi; }
 expect_reject() { local d="$1" pat="$2"; shift 2; if "$@" >"$SB/out" 2>&1; then bad "$d (unexpectedly succeeded)"; elif grep -q -- "$pat" "$SB/out"; then ok "$d"; else bad "$d (failed, but without '$pat')"; sed 's/^/        /' "$SB/out" | tail -n 8; fi; }
-as() { local u="$1"; shift; VEIL_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
+as() { local u="$1"; shift; EYESONLY_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
 url() { echo "http://$1:${TOK[$1]}@127.0.0.1:$PORT/app.git"; }
 in_() { local d="$1"; shift; (cd "$d" && "$@"); }
 
@@ -58,7 +58,7 @@ raw_push() {
 declare -A TOK
 echo "== setup"
 for u in alice bob junior; do
-  card=$(as $u $VEIL keygen $u 2>/dev/null)
+  card=$(as $u $EYESONLY keygen $u 2>/dev/null)
   TOK[$u]=$($VS user add "$card" 2>/dev/null)
 done
 $VS repo create app.git --admin alice 2>/dev/null
@@ -74,11 +74,11 @@ for _ in $(seq 50); do curl -sf "$BASE/healthz" >/dev/null && break; sleep 0.1; 
 
 mkdir -p "$SB/alice" && cd "$SB/alice"
 git init -q -b main && git remote add origin "$(url alice)"
-as alice $VEIL setup 2>/dev/null
+as alice $EYESONLY setup 2>/dev/null
 echo 'v1' > README.md && echo 'K=1' > .env
 as alice git add -A && as alice git commit -qm init && as alice git push -q -u origin main
-as bob $VEIL clone "$(url bob)" "$SB/bob" 2>/dev/null
-as junior $VEIL clone "$(url junior)" "$SB/junior" 2>/dev/null
+as bob $EYESONLY clone "$(url bob)" "$SB/bob" 2>/dev/null
+as junior $EYESONLY clone "$(url junior)" "$SB/junior" 2>/dev/null
 
 echo "== orphaned private commits (deleted branch)"
 cd "$SB/bob"

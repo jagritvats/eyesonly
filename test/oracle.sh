@@ -8,9 +8,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 PORT2=$((PORT + 1))
-export VEIL_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-VEIL="node $ROOT/bin/veil.mjs"
-VS="node $ROOT/bin/veil-server.mjs"
+export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+EYESONLY="node $ROOT/bin/eyesonly.mjs"
+VS="node $ROOT/bin/eyesonly-server.mjs"
 BASE="http://127.0.0.1:$PORT"
 PASS=0 FAIL=0
 
@@ -26,7 +26,7 @@ expect_reject() { local d="$1" pat="$2"; shift 2; if "$@" >"$SB/out" 2>&1; then 
 expect_out()  { local d="$1" pat="$2"; shift 2; if "$@" 2>&1 | grep -q -- "$pat"; then ok "$d"; else bad "$d (no '$pat')"; "$@" 2>&1 | sed 's/^/        /' | tail -n 8; fi; }
 
 # as <user> <cmd...>: run with that user's identity and git author
-as() { local u="$1"; shift; VEIL_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
+as() { local u="$1"; shift; EYESONLY_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@x GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@x "$@"; }
 url() { echo "http://$1:${TOK[$1]}@127.0.0.1:$PORT/app.git"; }
 in_() { local d="$1"; shift; (cd "$d" && "$@"); }
 
@@ -50,7 +50,7 @@ code_is() { local d="$1" want="$2" got="$3" o="$4" pat="${5:-}"; if [[ "$got" ==
 declare -A TOK
 echo "== setup"
 for u in alice bob junior; do
-  card=$(as $u $VEIL keygen $u 2>/dev/null)
+  card=$(as $u $EYESONLY keygen $u 2>/dev/null)
   TOK[$u]=$($VS user add "$card" 2>/dev/null)
 done
 $VS repo create app.git --admin alice 2>/dev/null
@@ -62,12 +62,12 @@ cat > "$SB/policy.json" <<'EOF'
 EOF
 $VS policy set app.git "$SB/policy.json" 2>/dev/null
 $VS serve --port "$PORT" 2>"$SB/server.log" & SRV=$!
-VEIL_MAX_UPLOAD_PACK_BODY=2000 $VS serve --port "$PORT2" 2>"$SB/server2.log" & SRV2=$!
+EYESONLY_MAX_UPLOAD_PACK_BODY=2000 $VS serve --port "$PORT2" 2>"$SB/server2.log" & SRV2=$!
 for _ in $(seq 50); do curl -sf "$BASE/healthz" >/dev/null && curl -sf "http://127.0.0.1:$PORT2/healthz" >/dev/null && break; sleep 0.1; done
 
 mkdir -p "$SB/alice" && cd "$SB/alice"
 git init -q -b main && git remote add origin "$(url alice)"
-as alice $VEIL setup 2>/dev/null
+as alice $EYESONLY setup 2>/dev/null
 echo 'console.log("hello")' > index.js && echo 'STRIPE_SECRET=sk_live_123' > .env
 as alice git add -A && as alice git commit -qm init
 echo 'v2' >> index.js && as alice git commit -qam second
@@ -78,9 +78,9 @@ expect_ok "alice pushes private/launch" as alice git push -q -u origin private/l
 as alice git checkout -q main
 PRIV=$(git rev-parse private/launch) MAIN=$(git rev-parse main) MAIN1=$(git rev-parse main~1)
 RAND=$(rand_sha)
-GD="$VEIL_DATA/repos/app.git"
-expect_ok "bob clones" as bob $VEIL clone "$(url bob)" "$SB/bob"
-expect_ok "junior clones" as junior $VEIL clone "$(url junior)" "$SB/junior"
+GD="$EYESONLY_DATA/repos/app.git"
+expect_ok "bob clones" as bob $EYESONLY clone "$(url bob)" "$SB/bob"
+expect_ok "junior clones" as junior $EYESONLY clone "$(url junior)" "$SB/junior"
 
 echo "== have-negotiation oracle"
 R="$SB/r" && mkdir -p "$R"
@@ -121,7 +121,7 @@ code_is "unsupported Content-Encoding -> 400" 400 "$C" "$R/o" "unsupported Conte
 
 echo "== malformed and oversized requests"
 printf zzzz > "$R/zzzz"
-C=$(post junior "$R/zzzz" "$R/o"); code_is "non-hex pkt-line length -> 400 (from veil, not git)" 400 "$C" "$R/o" "malformed pkt-line"
+C=$(post junior "$R/zzzz" "$R/o"); code_is "non-hex pkt-line length -> 400 (from eyesonly, not git)" 400 "$C" "$R/o" "malformed pkt-line"
 { pkt "want $MAIN"$'\n'; printf 0000; pkt "have nothex"$'\n'; printf 0000; } > "$R/nothex"
 C=$(post junior "$R/nothex" "$R/o"); code_is "have line that is not 40/64 hex -> 400" 400 "$C" "$R/o" "malformed 'have' line"
 { printf 00ff; printf 'want %s\n' "$MAIN"; } > "$R/long"
@@ -140,7 +140,7 @@ gzip -c "$R/big" > "$R/big.gz"
 C=$(post junior "$R/big.gz" "$R/o" -H 'Content-Encoding: gzip'); code_is "gzip bomb (small compressed, 11 MiB inflated) -> 413" 413 "$C" "$R/o" "decompressed"
 body "$R/medium" negotiate $(for _ in $(seq 60); do echo "have $(rand_sha)"; done)
 C=$(curl -s -o "$R/o" -w '%{http_code}' --data-binary @"$R/medium" -H 'Content-Type: application/x-git-upload-pack-request' -u "junior:${TOK[junior]}" "http://127.0.0.1:$PORT2/app.git/git-upload-pack")
-code_is "VEIL_MAX_UPLOAD_PACK_BODY=2000 caps a 3 KB body -> 413" 413 "$C" "$R/o" "larger than 2000"
+code_is "EYESONLY_MAX_UPLOAD_PACK_BODY=2000 caps a 3 KB body -> 413" 413 "$C" "$R/o" "larger than 2000"
 C=$(curl -s -o "$R/o" -w '%{http_code}' --data-binary @"$R/priv.neg" -H 'Content-Type: application/x-git-upload-pack-request' -u "junior:${TOK[junior]}" "http://127.0.0.1:$PORT2/app.git/git-upload-pack")
 code_is "control: the same small-cap server accepts a small body" 200 "$C" "$R/o" "NAK"
 C=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/healthz"); [[ "$C" == 200 ]] && ok "server still healthy after oversized requests" || bad "healthz $C"
@@ -163,7 +163,7 @@ const b = await filterUploadPackBody({ body, gitDir: process.argv[2], hiddenPref
 process.exit(!j.includes("shallow ") && b.equals(body) ? 0 : 1);
 ' "$ROOT" "$GD" "$R/shpriv" && ok "shallow <private> line is dropped for junior's prefixes and kept for bob's" || bad "shallow filtering"
 { pkt "want $MAIN"$'\n'; pkt "deepen-not refs/heads/private/launch"$'\n'; printf 0000; pkt "done"$'\n'; } > "$R/dnot"
-C=$(post junior "$R/dnot" "$R/o"); code_is "deepen-not -> 400" 400 "$C" "$R/o" "deepen-not is not supported by veil"
+C=$(post junior "$R/dnot" "$R/o"); code_is "deepen-not -> 400" 400 "$C" "$R/o" "deepen-not is not supported by eyesonly"
 
 echo "== pass-through is byte-exact"
 { pkt "want $MAIN multi_ack_detailed no-done side-band-64k thin-pack ofs-delta agent=git/2.x"$'\n'; pkt "want $MAIN1"$'\n'

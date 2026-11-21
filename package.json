@@ -1,14 +1,14 @@
 {
-  "name": "veil-git",
+  "name": "eyesonly",
   "version": "0.1.0",
   "description": "Per-user access control for git: private files, private branches, built-in secrets. Works with stock git clients.",
   "type": "module",
   "license": "MIT",
-  "bin": { "veil": "bin/veil.mjs", "veil-server": "bin/veil-server.mjs" },
+  "bin": { "eyesonly": "bin/eyesonly.mjs", "git-eyesonly": "bin/eyesonly.mjs", "eyesonly-server": "bin/eyesonly-server.mjs" },
   "engines": { "node": ">=20" },
   "files": ["bin", "src", "site"],
   "scripts": {
     "test": "bash test/run-all.sh",
-    "serve": "node bin/veil-server.mjs serve"
+    "serve": "node bin/eyesonly-server.mjs serve"
   }
 }

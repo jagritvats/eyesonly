@@ -1,8 +1,8 @@
-// Veil envelope format (VEIL-V1).
+// Eyes Only envelope format (EYESONLY-V1).
 //
-//   content:  AES-256-GCM(DEK, plaintext, AAD = "veil-v1\0" + path)
+//   content:  AES-256-GCM(DEK, plaintext, AAD = "eyesonly-v1\0" + path)
 //   wrapping: per recipient, X25519(ephemeral, recipient) -> HKDF-SHA256 -> KEK
-//             AES-256-GCM(KEK, DEK, AAD = "veil-wrap\0" + recipient)
+//             AES-256-GCM(KEK, DEK, AAD = "eyesonly-wrap\0" + recipient)
 //   signing:  Ed25519 over the canonical JSON of every field except `sig`
 //
 // Binding the path into the AAD means a ciphertext can't be moved from one
@@ -10,7 +10,8 @@
 // produce an envelope, so a stranger can't swap in a secret encrypted to the team.
 import crypto from 'node:crypto';
 
-export const MAGIC = 'VEIL-V1\n';
+export const MAGIC = 'EYESONLY-V1\n';
+export const CARD_PREFIX = 'eyesonlypub1:';
 const MAGIC_BUF = Buffer.from(MAGIC);
 
 const b64 = (b) => Buffer.from(b).toString('base64');
@@ -34,12 +35,12 @@ export function publicCard(identity) {
 }
 
 export function encodeCard(card) {
-  return 'veilpub1:' + Buffer.from(JSON.stringify(card)).toString('base64url');
+  return CARD_PREFIX + Buffer.from(JSON.stringify(card)).toString('base64url');
 }
 
 export function decodeCard(s) {
-  if (!s.startsWith('veilpub1:')) throw new Error('not a veil public card (expected veilpub1:...)');
-  const card = JSON.parse(Buffer.from(s.slice(9), 'base64url').toString('utf8'));
+  if (!s.startsWith(CARD_PREFIX)) throw new Error('not an eyesonly public card (expected eyesonlypub1:...)');
+  const card = JSON.parse(Buffer.from(s.slice(CARD_PREFIX.length), 'base64url').toString('utf8'));
   pubKey(card.x25519); // validates
   pubKey(card.ed25519);
   if (!/^[a-z0-9][a-z0-9._-]{0,38}$/i.test(card.name)) throw new Error('invalid user name in card');
@@ -65,7 +66,7 @@ const signedBytes = (env) => {
 };
 
 function kek(shared, epkDer, rpkDer) {
-  return Buffer.from(crypto.hkdfSync('sha256', shared, Buffer.concat([epkDer, rpkDer]), 'veil-wrap-v1', 32));
+  return Buffer.from(crypto.hkdfSync('sha256', shared, Buffer.concat([epkDer, rpkDer]), 'eyesonly-wrap-v1', 32));
 }
 
 export function isEnvelope(buf) {
@@ -83,7 +84,7 @@ export function seal({ plaintext, path, recipients, signer }) {
   const dek = crypto.randomBytes(32);
   const iv = crypto.randomBytes(12);
   const c = crypto.createCipheriv('aes-256-gcm', dek, iv);
-  c.setAAD(Buffer.from('veil-v1\0' + path));
+  c.setAAD(Buffer.from('eyesonly-v1\0' + path));
   const ct = Buffer.concat([c.update(plaintext), c.final()]);
   const tag = c.getAuthTag();
 
@@ -95,7 +96,7 @@ export function seal({ plaintext, path, recipients, signer }) {
     const shared = crypto.diffieHellman({ privateKey: eph.privateKey, publicKey: pubKey(recipients[name]) });
     const wiv = crypto.randomBytes(12);
     const wc = crypto.createCipheriv('aes-256-gcm', kek(shared, epkDer, rpkDer), wiv);
-    wc.setAAD(Buffer.from('veil-wrap\0' + name));
+    wc.setAAD(Buffer.from('eyesonly-wrap\0' + name));
     const wrapped = Buffer.concat([wc.update(dek), wc.final(), wc.getAuthTag()]);
     keys[name] = { iv: b64(wiv), key: b64(wrapped) };
   }
@@ -106,7 +107,7 @@ export function seal({ plaintext, path, recipients, signer }) {
 }
 
 export function parse(buf) {
-  if (!isEnvelope(buf)) throw new Error('not a veil envelope');
+  if (!isEnvelope(buf)) throw new Error('not an eyesonly envelope');
   const env = JSON.parse(buf.subarray(MAGIC_BUF.length).toString('utf8'));
   for (const f of ['path', 'signer', 'epk', 'iv', 'tag', 'ct', 'sig']) {
     if (typeof env[f] !== 'string') throw new Error(`malformed envelope: missing ${f}`);
@@ -130,12 +131,12 @@ export function open(env, identity) {
   const shared = crypto.diffieHellman({ privateKey: privKey(identity.x25519.priv), publicKey: pubKey(env.epk) });
   const wrapped = unb64(entry.key);
   const wd = crypto.createDecipheriv('aes-256-gcm', kek(shared, unb64(env.epk), unb64(identity.x25519.pub)), unb64(entry.iv));
-  wd.setAAD(Buffer.from('veil-wrap\0' + identity.name));
+  wd.setAAD(Buffer.from('eyesonly-wrap\0' + identity.name));
   wd.setAuthTag(wrapped.subarray(wrapped.length - 16));
   const dek = Buffer.concat([wd.update(wrapped.subarray(0, wrapped.length - 16)), wd.final()]);
 
   const d = crypto.createDecipheriv('aes-256-gcm', dek, unb64(env.iv));
-  d.setAAD(Buffer.from('veil-v1\0' + env.path));
+  d.setAAD(Buffer.from('eyesonly-v1\0' + env.path));
   d.setAuthTag(unb64(env.tag));
   return Buffer.concat([d.update(unb64(env.ct)), d.final()]);
 }

@@ -1,14 +1,14 @@
-// Outbound mirror: push verified public refs from a Veil repo to GitHub/GitLab/Gitea.
+// Outbound mirror: push verified public refs from an Eyes Only repo to GitHub/GitLab/Gitea.
 //
-//   veil-server mirror set  <repo.git> --url U --push <ref|glob>... [--allow-force]
+//   eyesonly-server mirror set  <repo.git> --url U --push <ref|glob>... [--allow-force]
 //                           [--delete-upstream on-private] [--credential-file F] [--allow-local]
-//   veil-server mirror show <repo.git>
-//   veil-server mirror push <repo.git> [--trust-current]
+//   eyesonly-server mirror show <repo.git>
+//   eyesonly-server mirror push <repo.git> [--trust-current]
 //
 // Admin CLI only (never an HTTP route). Deny by default, fail closed:
 //   * only refs that are on the allowlist AND public under the current policy are eligible;
 //     refs/heads/private/* never is;
-//   * eligible refs are fetched into a separate staging repo (<repo>.git/veil-mirror-stage.git)
+//   * eligible refs are fetched into a separate staging repo (<repo>.git/eyesonly-mirror-stage.git)
 //     through upload-pack, so the stage physically lacks private objects and the upstream
 //     push can't use them as thin-pack delta bases;
 //   * every commit about to go upstream is re-verified (no history from a narrower-audience
@@ -22,19 +22,19 @@ import * as vc from './crypto.mjs';
 import { expand, fileRule, refRule, isSubset } from './policy.mjs';
 
 // Local copies of trivial server.mjs helpers (importing server.mjs would be a cycle).
-const DATA = () => path.resolve(process.env.VEIL_DATA || 'veil-data');
+const DATA = () => path.resolve(process.env.EYESONLY_DATA || 'eyesonly-data');
 const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.git$/;
 const repoDir = (name) => path.join(DATA(), 'repos', name);
-const loadPolicy = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'veil.json'), 'utf8'));
+const loadPolicy = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'eyesonly.json'), 'utf8'));
 function loadUsers() {
   const f = path.join(DATA(), 'users.json');
   return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')).users : {};
 }
 
-const configFile = (dir) => path.join(dir, 'veil-mirror.json');
-const logFile = (dir) => path.join(dir, 'veil-mirror.log');
-const stageDir = (dir) => path.join(dir, 'veil-mirror-stage.git');
-const lockFile = (dir) => path.join(dir, 'veil-mirror.lock');
+const configFile = (dir) => path.join(dir, 'eyesonly-mirror.json');
+const logFile = (dir) => path.join(dir, 'eyesonly-mirror.log');
+const stageDir = (dir) => path.join(dir, 'eyesonly-mirror-stage.git');
+const lockFile = (dir) => path.join(dir, 'eyesonly-mirror.lock');
 const PRIVATE_PREFIX = 'refs/heads/private/';
 const UPSTREAM = 'refs/upstream/'; // in the stage: refs/upstream/heads/main = last oid pushed for refs/heads/main
 
@@ -158,7 +158,7 @@ function validateConfig(cfg, dir) {
 }
 
 function loadConfig(dir) {
-  if (!fs.existsSync(configFile(dir))) fail(`no mirror configured; run: veil-server mirror set ${path.basename(dir)} --url ... --push refs/heads/main`);
+  if (!fs.existsSync(configFile(dir))) fail(`no mirror configured; run: eyesonly-server mirror set ${path.basename(dir)} --url ... --push refs/heads/main`);
   let cfg;
   try {
     cfg = JSON.parse(fs.readFileSync(configFile(dir), 'utf8'));
@@ -178,7 +178,7 @@ function writePrivate(file, data) {
 
 function repoArg(name) {
   const dir = repoDir(name || '');
-  if (!REPO_RE.test(name || '') || !fs.existsSync(path.join(dir, 'veil.json'))) fail(`no such repo '${name || ''}'`);
+  if (!REPO_RE.test(name || '') || !fs.existsSync(path.join(dir, 'eyesonly.json'))) fail(`no such repo '${name || ''}'`);
   return dir;
 }
 
@@ -201,11 +201,11 @@ function cmdSet(name, args) {
   const old = fs.existsSync(configFile(dir)) ? JSON.parse(fs.readFileSync(configFile(dir), 'utf8')) : null;
   if (old && old.url !== cfg.url && fs.existsSync(stageDir(dir))) {
     fs.rmSync(stageDir(dir), { recursive: true, force: true }); // its upstream records belong to the old url
-    console.error('[veil] mirror url changed: reset the staging repo');
+    console.error('[eyesonly] mirror url changed: reset the staging repo');
   }
   writePrivate(configFile(dir), JSON.stringify(cfg, null, 2) + '\n');
-  for (const e of cfg.push) if (e.startsWith(PRIVATE_PREFIX)) console.error(`[veil] note: ${e} is under ${PRIVATE_PREFIX} and will never be mirrored`);
-  console.error(`[veil] mirror for ${name} -> ${cfg.url} saved. Protect the upstream branches (see README) and run: veil-server mirror push ${name}`);
+  for (const e of cfg.push) if (e.startsWith(PRIVATE_PREFIX)) console.error(`[eyesonly] note: ${e} is under ${PRIVATE_PREFIX} and will never be mirrored`);
+  console.error(`[eyesonly] mirror for ${name} -> ${cfg.url} saved. Protect the upstream branches (see README) and run: eyesonly-server mirror push ${name}`);
 }
 
 function cmdShow(name) {
@@ -275,7 +275,7 @@ function verifyContent(stage, ref, commits, ctx, cache) {
       let reason = null;
       if (type !== 'blob' || mode === '120000') reason = 'not a regular file';
       else reason = verifyEnvelope(git(stage, ['cat-file', 'blob', oid], { buffer: true }), file, ctx.policy, ctx.users, ctx.all);
-      if (reason) fail(`refusing to mirror ${ref}: '${file}' in ${commit.slice(0, 8)} is NOT a valid veil envelope (${reason})`);
+      if (reason) fail(`refusing to mirror ${ref}: '${file}' in ${commit.slice(0, 8)} is NOT a valid eyesonly envelope (${reason})`);
       cache.blobs.add(key);
     }
   }
@@ -387,7 +387,7 @@ function pushLocked(dir, cfg, token, trustCurrent) {
     if (isPublic(ref)) eligible.push(ref);
     else {
       skipped.push(ref);
-      console.error(`[veil] skipping ${ref}: not public`);
+      console.error(`[eyesonly] skipping ${ref}: not public`);
     }
   }
 
@@ -403,7 +403,7 @@ function pushLocked(dir, cfg, token, trustCurrent) {
     resetStage(stage, eligible);
     throw e;
   }
-  if (skipped.length) fail(`${skipped.length} allowlisted ref(s) skipped because they are not public; remove them from the allowlist (veil-server mirror set)`);
+  if (skipped.length) fail(`${skipped.length} allowlisted ref(s) skipped because they are not public; remove them from the allowlist (eyesonly-server mirror set)`);
 }
 
 function resetStage(stage, refs) {
@@ -469,26 +469,26 @@ function mirrorRefs({ dir, cfg, token, trustCurrent, snapshot, policy, users, al
   for (const r of updates) {
     git(stage, ['update-ref', UPSTREAM + r.slice(5), snapshot.get(r)]);
     log.push({ ts, ref: r, old: upstream.get(r) || null, new: snapshot.get(r) });
-    console.error(`[veil] mirrored ${r} ${(upstream.get(r) || 'new').slice(0, 8)}..${snapshot.get(r).slice(0, 8)}`);
+    console.error(`[eyesonly] mirrored ${r} ${(upstream.get(r) || 'new').slice(0, 8)}..${snapshot.get(r).slice(0, 8)}`);
   }
   // (h) refs that were public upstream and are now private or gone
   for (const r of retire) {
     if (deletions.includes(r)) {
       log.push({ ts, ref: r, old: upstream.get(r), new: null });
-      console.error(`[veil] deleted ${r} upstream`);
+      console.error(`[eyesonly] deleted ${r} upstream`);
     }
     console.error(
-      `[veil] ${r} was public upstream since ${firstMirrored(dir, r) || 'an earlier mirror'}; the upstream keeps refs/pull/* and cached objects, so treat its content as disclosed`,
+      `[eyesonly] ${r} was public upstream since ${firstMirrored(dir, r) || 'an earlier mirror'}; the upstream keeps refs/pull/* and cached objects, so treat its content as disclosed`,
     );
     git(stage, ['update-ref', '-d', UPSTREAM + r.slice(5)]);
     if (run(stage, ['rev-parse', '-q', '--verify', r]).status === 0) git(stage, ['update-ref', '-d', r]);
   }
   if (retire.length) {
-    if (!deletions.length) console.error('[veil] the upstream copy was left in place (--delete-upstream on-private removes it)');
+    if (!deletions.length) console.error('[eyesonly] the upstream copy was left in place (--delete-upstream on-private removes it)');
     git(stage, ['-c', 'gc.reflogExpire=now', '-c', 'gc.reflogExpireUnreachable=now', 'gc', '--quiet', '--prune=now']);
   }
   if (log.length) fs.appendFileSync(logFile(dir), log.map((e) => JSON.stringify(e) + '\n').join(''), { mode: 0o600 });
-  if (!refspecs.length) console.error('[veil] upstream is up to date');
+  if (!refspecs.length) console.error('[eyesonly] upstream is up to date');
 }
 
 // ------------------------------------------------------------------ CLI
@@ -498,10 +498,10 @@ export function cmdMirror([sub, name, ...rest]) {
     if (sub === 'set') return cmdSet(name, rest);
     if (sub === 'show') return cmdShow(name);
     if (sub === 'push') return cmdPush(name, rest);
-    fail('usage: veil-server mirror set <name.git> --url U --push <ref|glob>... | show <name.git> | push <name.git>');
+    fail('usage: eyesonly-server mirror set <name.git> --url U --push <ref|glob>... | show <name.git> | push <name.git>');
   } catch (e) {
     if (!(e instanceof MirrorError)) throw e;
-    console.error(`[veil] ${scrub(e.message)}`);
+    console.error(`[eyesonly] ${scrub(e.message)}`);
     process.exit(1);
   }
 }

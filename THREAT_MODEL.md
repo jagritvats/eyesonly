@@ -1,6 +1,6 @@
-# Veil threat model
+# Eyes Only threat model
 
-**Security boundary:** the `veil-server` process, its data directory and its
+**Security boundary:** the `eyesonly-server` process, its data directory and its
 pre-receive hook. Clients are untrusted. The client filter only makes things
 convenient; the server enforces.
 
@@ -25,27 +25,27 @@ convenient; the server enforces.
 
 | # | Attack | Defense | Test |
 |---|---|---|---|
-| 1 | A4/A1 pushes a plaintext `.env` with filters disabled | Hook: every protected path must be a valid `VEIL-V1` envelope | ✅ |
+| 1 | A4/A1 pushes a plaintext `.env` with filters disabled | Hook: every protected path must be a valid `EYESONLY-V1` envelope | ✅ |
 | 2 | A1 encrypts their own `.env` to the whole team (validly) and pushes it | Hook: the pusher must be in the file's audience to change it; the envelope's signer must be an allowed writer | ✅ |
 | 3 | A1 replays an older, validly signed `.env` (rollback) | Hook: any change to a protected blob needs an authorized pusher, so a signature alone isn't enough | ✅ |
 | 4 | A1 deletes a protected file | Hook: deletion counts as a modification | ✅ |
 | 5 | A1 moves a ciphertext from `secrets/a` to `.env` | Path is in the GCM AAD and the signature; the hook and smudge check `env.path` | ✅ (rename test) |
 | 6 | A2 guesses tokens or impersonates a user | Random 192-bit tokens, stored as SHA-256 and compared in constant time; username must match the token | ✅ |
 | 7 | A1 reads objects via **dumb HTTP** (`GET /repo.git/objects/ab/cdef…`) | Proxy serves only the 3 smart-protocol routes; `http.getanyfile=false` as well | ✅ |
-| 8 | A1 fetches a hidden commit **by SHA over protocol v2** | **Verified real**: stock `hideRefs` doesn't stop v2 `want <sha>`. The proxy drops `Git-Protocol`, forcing v0 with every `allow*SHA1InWant=false` | ✅ (fails if `VEIL_ALLOW_PROTOCOL_V2=1`) |
+| 8 | A1 fetches a hidden commit **by SHA over protocol v2** | **Verified real**: stock `hideRefs` doesn't stop v2 `want <sha>`. The proxy drops `Git-Protocol`, forcing v0 with every `allow*SHA1InWant=false` | ✅ (fails if `EYESONLY_ALLOW_PROTOCOL_V2=1`) |
 | 9 | A1 lists or fetches private refs by name | Per-user `transfer.hideRefs` | ✅ |
 | 10 | A1 pushes to `private/*` | Hidden refs can't be updated (git) **and** the hook's branch write rule | ✅ |
 | 11 | A4 merges `private/launch` into `main` (exposing its history) | Hook: commits that become reachable from a ref must not come from a ref with a narrower audience. Squash merges are allowed | ✅ |
-| 12 | A1 grants themselves access by editing the policy | Policy lives on the server (`<repo>.git/veil.json`), not in the repo; the client copy is advisory | by design |
+| 12 | A1 grants themselves access by editing the policy | Policy lives on the server (`<repo>.git/eyesonly.json`), not in the repo; the client copy is advisory | by design |
 | 13 | A1 learns private branch names from the policy endpoint | The client policy view omits branch rules | ✅ |
-| 14 | A3 reads secrets changed after revocation | `veil rekey` re-encrypts without them; hook rejects envelopes that include non-audience recipients | ✅ |
+| 14 | A3 reads secrets changed after revocation | `eyesonly rekey` re-encrypts without them; hook rejects envelopes that include non-audience recipients | ✅ |
 | 15 | A4 pushes with a stale policy that still includes a revoked user | Same check as #14; error tells them to `pull-policy && rekey` | ✅ |
 | 16 | Path traversal via repo name | Strict `^[A-Za-z0-9][A-Za-z0-9._-]*\.git$`; unknown and non-member repos both return 404 | ✅ |
 | 17 | Malicious env injection into `git http-backend` | Env is built from scratch (allow-list), `GIT_CONFIG_NOSYSTEM=1` | by design |
 | 18 | A1's client is tricked into decrypting/using a forged secret | Smudge checks the Ed25519 signature and that the signer is an allowed writer before writing plaintext | by design |
 | 19 | A1 probes whether the server holds a private commit via `have <sha>` ACKs (object-existence oracle) | Proxy parses the upload-pack body and drops have/shallow lines for objects not reachable from refs visible to the user; the response is byte-identical to a nonexistent sha | ✅ (test/oracle.sh) |
-| 20 | A5 swaps a teammate's public key so new secrets are encrypted to the server | An admin signs a manifest of file rules + keys (`veil policy-sign`); clients verify it and use only the manifest's keys. A tampered manifest fails with `policy signature invalid` and the cached policy is left untouched | ✅ (test/attest.sh) |
-| 21 | A5 makes itself (or mallory) an admin and re-signs the policy | Clients pin the admin key on first contact (`.git/veil/trust.json`, or out of band with `VEIL_PIN_ADMIN`) and refuse other signers: `not signed by a pinned admin` | ✅ (test/attest.sh) |
+| 20 | A5 swaps a teammate's public key so new secrets are encrypted to the server | An admin signs a manifest of file rules + keys (`eyesonly policy-sign`); clients verify it and use only the manifest's keys. A tampered manifest fails with `policy signature invalid` and the cached policy is left untouched | ✅ (test/attest.sh) |
+| 21 | A5 makes itself (or mallory) an admin and re-signs the policy | Clients pin the admin key on first contact (`.git/eyesonly/trust.json`, or out of band with `EYESONLY_PIN_ADMIN`) and refuse other signers: `not signed by a pinned admin` | ✅ (test/attest.sh) |
 | 22 | A5 rolls back to an older, validly signed policy (e.g. one that still includes a revoked user) | Manifests carry a version; clients refuse anything older than the last version they saw, and a same-version manifest with different content | ✅ (test/attest.sh) |
 | 23 | A5 downgrades to an unsigned policy | Once a repo was signed, the client refuses an unsigned policy: `repo was signed; server now serves an unsigned policy` | ✅ (test/attest.sh) |
 | 24 | A5 injects a recipient (or a signing key) into the unsigned part of the policy view | Clients encrypt only to, and accept envelope signatures only from, keys in the signed manifest; the server flags `attestation_stale` and the client warns | ✅ (test/attest.sh) |
@@ -61,14 +61,14 @@ convenient; the server enforces.
 | 42 | A plaintext or forged protected blob reaches the upstream after being written behind the hook (plumbing, hook bug), or private history is fast-forwarded into a public ref | Every commit new to the upstream is re-verified in the stage: protected paths must be valid envelopes signed by a registered writer in the file's audience, and no commit may come only from a narrower-audience ref (relative to what the upstream already has). Any failure pushes nothing | ✅ (test/mirror.sh) |
 | 43 | A policy change makes an already-mirrored branch private | The next run skips it and says plainly that the upstream copy must be treated as disclosed (forks, `refs/pull/*` and caches keep it); `--delete-upstream on-private` deletes the upstream ref; the stage drops it and prunes its objects | ✅ (test/mirror.sh) |
 | 44 | Code execution through the mirror URL (`ext::`, `fd::`, `file://`) | `<transport>::` URLs are always refused, local paths only with `--allow-local`; the push runs with `protocol.allow=never` plus https/ssh (file only with `--allow-local`), checked again at push time | ✅ (test/mirror.sh) |
-| 45 | The upstream credential leaks via argv, the URL, logs or the HTTP proxy | Token is read from a 0600 file outside the repo dir and passed as `http.extraHeader` through `GIT_CONFIG_*` env, never argv or URL; redirects are not followed; error output is scrubbed; `veil-mirror.json` is 0600, shows only the path, and nothing under the repo dir but the 3 smart-HTTP routes is served | ✅ (test/mirror.sh) |
-| 46 | Someone pushes directly to the upstream, bypassing Veil | **Limitation**: Veil can't police another host. Upstream branch protection must allow only the mirror's credential to push mirrored branches; Veil refuses to force over upstream changes (`non-fast-forward; not retrying with force`, leases with `--allow-force`) | ✅ (divergence test); protection is documented |
-| 50 | A1/A4 adds `.env filter=lfs` (or `-filter`, `!filter`, an `[attr]` macro) to the in-tree `.gitattributes`, so an authorized dev's `git add` hands plaintext to git-lfs, whose pre-push hook uploads it before veil sees anything | Client: `veil setup`/`clone`/`pull-policy` pin `filter=veil` in a managed block of `.git/info/attributes`, which beats every in-tree file (works with `--no-verify`, `core.hooksPath` and IDEs). Pre-commit and `veil status` report any protected path that resolves elsewhere. Server: a commit touching a `.gitattributes` is checked with `git check-attr --source` on every protected path plus one sample per policy glob; anything but `veil` (or a `veil` -> `unspecified` downgrade) is rejected. Needs git >= 2.40 on the server (fails closed) | ✅ (test/pinning.sh) |
+| 45 | The upstream credential leaks via argv, the URL, logs or the HTTP proxy | Token is read from a 0600 file outside the repo dir and passed as `http.extraHeader` through `GIT_CONFIG_*` env, never argv or URL; redirects are not followed; error output is scrubbed; `eyesonly-mirror.json` is 0600, shows only the path, and nothing under the repo dir but the 3 smart-HTTP routes is served | ✅ (test/mirror.sh) |
+| 46 | Someone pushes directly to the upstream, bypassing Eyes Only | **Limitation**: Eyes Only can't police another host. Upstream branch protection must allow only the mirror's credential to push mirrored branches; Eyes Only refuses to force over upstream changes (`non-fast-forward; not retrying with force`, leases with `--allow-force`) | ✅ (divergence test); protection is documented |
+| 50 | A1/A4 adds `.env filter=lfs` (or `-filter`, `!filter`, an `[attr]` macro) to the in-tree `.gitattributes`, so an authorized dev's `git add` hands plaintext to git-lfs, whose pre-push hook uploads it before eyesonly sees anything | Client: `eyesonly setup`/`clone`/`pull-policy` pin `filter=eyesonly` in a managed block of `.git/info/attributes`, which beats every in-tree file (works with `--no-verify`, `core.hooksPath` and IDEs). Pre-commit and `eyesonly status` report any protected path that resolves elsewhere. Server: a commit touching a `.gitattributes` is checked with `git check-attr --source` on every protected path plus one sample per policy glob; anything but `eyesonly` (or a `eyesonly` -> `unspecified` downgrade) is rejected. Needs git >= 2.40 on the server (fails closed) | ✅ (test/pinning.sh) |
 | 51 | A1 adds a nested `secrets/.gitattributes` with `* filter=lfs` (or a case variant `.GITATTRIBUTES` that macOS/Windows clients read) | Same pin on the client. Server probes the nested directory too and refuses attribute/LFS file names that differ from `.gitattributes`/`.lfsconfig` only by case. Globs with character classes get best-effort samples | ✅ (test/pinning.sh) |
 | 52 | A1 commits a `.lfsconfig` pointing `lfs.url` / `remote.*.lfsurl` / `url.*.insteadOf` at an attacker | Server: only admins may add or change those keys (parsed with `git config --blob`; an unparseable `.lfsconfig` from a non-admin is rejected). Other `.lfsconfig` keys stay editable | ✅ (test/pinning.sh) |
-| 53 | `git worktree` splits veil state: each worktree TOFU-pins its own admin, or a stale worktree-local `trust.json` overrides the main repo's pin | All veil state (policy, trust) lives in the common git dir. Older worktree-local state is moved there once; if a worktree has its own `trust.json` that differs, veil dies (`conflicting veil trust`) instead of choosing | ✅ (test/pinning.sh) |
+| 53 | `git worktree` splits eyesonly state: each worktree TOFU-pins its own admin, or a stale worktree-local `trust.json` overrides the main repo's pin | All eyesonly state (policy, trust) lives in the common git dir. Older worktree-local state is moved there once; if a worktree has its own `trust.json` that differs, eyesonly dies (`conflicting eyesonly trust`) instead of choosing | ✅ (test/pinning.sh) |
 | 60 | A1 plants a forged side (signed by a non-writer, or moved from another path) on a branch and waits for an honest reader to merge it, so the merger's re-seal launders it under a valid signature | The merge driver verifies all three sides with the same checks as smudge (signature by an allowed writer, `env.path` equals the merged path) and refuses before decrypting anything: `can't merge '.env': theirs: signer 'junior' is not an allowed writer`. Ours is left in place and nothing is re-sealed | ✅ (test/merge.sh) |
-| 61 | Plaintext temp files left on disk by a merge | Temp files live in `<git common dir>/veil/tmp` (dir `0700`, files `0600`, random names), are unlinked in `finally` on every path, and files older than 1h (from a killed process) are swept on the next merge | ✅ (test/merge.sh) |
+| 61 | Plaintext temp files left on disk by a merge | Temp files live in `<git common dir>/eyesonly/tmp` (dir `0700`, files `0600`, random names), are unlinked in `finally` on every path, and files older than 1h (from a killed process) are swept on the next merge | ✅ (test/merge.sh) |
 | 62 | Conflict markers with plaintext in the working tree | Only for users who can already read every side (non-readers get a refusal and keep the ours envelope). No worse than a normal checkout; `git add` re-seals via clean, and the server still rejects plaintext. Git also stores the conflicted result as an unreachable local loose object (and in `rr-cache` if rerere is on): local only, never pushed, pruned by `git gc` | ✅ (test/merge.sh) |
 | 70 | A1 brings back commits from a **deleted** private branch by pointing a public ref at their oid (squash-merge messages list them), sending no objects | Object allowlist in the hook: every object a ref update makes newly visible must have been sent in this push (it's in the push quarantine) or already be reachable from refs its audience can see. Admins may restore deleted branches | ✅ (test/objects.sh) |
 | 71 | A1 pushes a **tag that points straight at a private tree or blob** (no commit, so commit-only history checks never see it) | Non-admin refs must peel to a commit; the object allowlist (#70) also covers trees and blobs. The mirror refuses any ref that doesn't peel to a commit | ✅ (test/objects.sh) |
@@ -80,7 +80,7 @@ convenient; the server enforces.
 These are stated plainly, because over-claiming is how security products lose trust.
 
 1. **Revocation isn't retroactive.** A3 keeps every version they could already
-   decrypt. `veil audit <user>` lists exactly which files to rotate. Crypto can't fix
+   decrypt. `eyesonly audit <user>` lists exactly which files to rotate. Crypto can't fix
    this; only rotation does.
 2. **Metadata leaks on shared branches.** A1 sees that `.env` exists, its size (roughly),
    when it changed and who signed it. Hiding file *existence* needs a virtual-filesystem
@@ -89,15 +89,15 @@ These are stated plainly, because over-claiming is how security products lose tr
 4. **Compromised server (A5).** The server can't read protected *files* (it never holds
    private keys) and, once an admin signs the policy, it can't lie about public keys or
    audiences (#20-24). It still sees private *branches* (they're plaintext git objects).
-   Admin trust is TOFU: the first contact is trusted unless `VEIL_PIN_ADMIN` is set,
+   Admin trust is TOFU: the first contact is trusted unless `EYESONLY_PIN_ADMIN` is set,
    unsigned repos are only warned about, and adding or rotating an admin needs a
-   re-pin (re-clone, or delete `.git/veil/trust.json`).
+   re-pin (re-clone, or delete `.git/eyesonly/trust.json`).
 5. **Pre-receive cost.** The hook runs `ls-tree -r` per new commit; large monorepos
    need path-filtered diffs (roadmap 0.2). Each ref update also runs one `diff-tree` between old and new tips and validates only
    the protected paths that changed, so its cost is bounded by protected paths, not repo size.
 6. **Protocol v0 only.** That's a deliberate trade-off (see #8) and costs some fetch
    efficiency on very large repos.
-7. **Transport.** `veil-server` speaks plain HTTP. Deploy it behind TLS. Tokens are
+7. **Transport.** `eyesonly-server` speaks plain HTTP. Deploy it behind TLS. Tokens are
    bearer credentials.
 8. **No forward secrecy for files.** Losing a user's X25519 private key exposes every
    envelope addressed to them. Store keys with `0600` (done), and move to hardware-backed
@@ -106,9 +106,9 @@ These are stated plainly, because over-claiming is how security products lose tr
 ## Crypto summary
 
 - Content: AES-256-GCM, random 256-bit DEK and 96-bit IV per seal,
-  AAD = `"veil-v1\0" || path`.
+  AAD = `"eyesonly-v1\0" || path`.
 - Key wrap: an ephemeral X25519 key per seal; per recipient
-  `KEK = HKDF-SHA256(ECDH, salt = epk || rpk, info = "veil-wrap-v1")`, then the DEK is
-  wrapped with AES-256-GCM, AAD = `"veil-wrap\0" || name`.
+  `KEK = HKDF-SHA256(ECDH, salt = epk || rpk, info = "eyesonly-wrap-v1")`, then the DEK is
+  wrapped with AES-256-GCM, AAD = `"eyesonly-wrap\0" || name`.
 - Authenticity: Ed25519 over canonical JSON (sorted keys) of every field except `sig`.
 - All primitives come from Node's OpenSSL bindings; nothing is hand-rolled.

@@ -3,7 +3,17 @@
 Thanks for helping. A few rules keep a security tool trustworthy:
 
 1. **`npm test` must pass.** It runs every `test/*.sh` suite against a real local server.
-   You need Node ≥ 22, git ≥ 2.40, bash ≥ 4 and curl.
+   You need Node ≥ 22, git ≥ 2.40, bash ≥ 4 and curl. CI runs it on Linux, macOS and Windows.
+   - **Linux:** nothing extra.
+   - **macOS:** the suites need a newer bash than the stock 3.2: `brew install bash`, then
+     `npm test` (it uses the first `bash` on your PATH). `examples/demo.sh` must keep
+     working on the stock `/bin/bash` 3.2, so no associative arrays or other bash 4 features
+     there.
+   - **Windows:** run `npm test` from Git Bash (Git for Windows). POSIX permission checks are
+     skipped there and say so.
+   - Use the helpers in `test/lib/compat.sh` (`sedi`, `file_mode`, `check_mode`, `now_ms`,
+     `set_mtime_ago`, `rawargs`, `native_path`) rather than GNU-only flags such as `sed -i`,
+     `stat -c`, `touch -d`, `date +%N` or `head -c 11M`.
 2. **Security fixes need an adversarial test that fails before the fix.** Follow the style in
    `test/e2e.sh`: `expect_reject` asserts the specific error message, so an attack can't
    "pass" by failing for an unrelated reason.

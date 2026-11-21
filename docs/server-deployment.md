@@ -17,6 +17,46 @@ directory (`EYESONLY_DATA`).
 
 SSH transport, a web UI and SSO are not supported.
 
+## Quick start (recommended)
+
+Docker Compose with Caddy for automatic HTTPS. On a host with Docker, a domain pointing at
+it, and ports 80 and 443 open:
+
+```bash
+git clone https://github.com/jagritvats/eyesonly && cd eyesonly/deploy
+echo "EYESONLY_DOMAIN=code.example.com" > .env
+docker compose up -d
+docker compose run --rm eyesonly eyesonly-server init \
+  --admin eyesonlypub1:... --repo app.git --url https://code.example.com
+```
+
+The card comes from `eyesonly keygen <you>` on your laptop. `init` creates the admin user,
+the repo and a starter policy, prints your token once, and prints the commands to clone the
+repo or push an existing one into it. Details: [deploy/README.md](../deploy/README.md).
+
+Without Docker, the same bootstrap is one command after `npm i -g eyesonly`:
+
+```bash
+export EYESONLY_DATA=/srv/eyesonly
+eyesonly-server init --admin eyesonlypub1:... --repo app.git --url https://code.example.com
+eyesonly-server serve --host 127.0.0.1 --port 8787      # TLS proxy in front (below)
+```
+
+`init` options:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--admin <card>` | required | the admin's public card (`eyesonly keygen`) |
+| `--repo <name.git>` | required | the first repo |
+| `--files <globs>` | `.env,secrets/**` | comma-separated paths encrypted for the `core` group |
+| `--private-prefix <ref prefix>` | `refs/heads/private/` | branches visible only to `core`; `''` for none |
+| `--url <base url>` | `http://127.0.0.1:8787` | only used to print the clone commands |
+
+The starter policy: everyone registered is a member, the admin is the only admin and the
+only member of `core`, and `core` reads the protected files and private branches. `init`
+refuses to touch an existing user or repo; on a running server use `user add`,
+`repo create` and `policy set`.
+
 ## Install
 
 ### npm
@@ -64,7 +104,9 @@ $EYESONLY_DATA/
       eyesonly-mirror-stage.git/     mirror staging repo
 ```
 
-## First run
+## First run, step by step
+
+`init` (above) does this in one go. By hand:
 
 ```bash
 export EYESONLY_DATA=/srv/eyesonly
@@ -74,7 +116,7 @@ eyesonly-server policy set app.git policy.json     # or `-` to read stdin
 eyesonly-server serve --host 127.0.0.1 --port 8787
 ```
 
-A new repo's policy is `{ "members": ["*"], "admins": ["<admin>"] }` with no protected
+A repo made with `repo create` starts with the policy `{ "members": ["*"], "admins": ["<admin>"] }` with no protected
 files or branches. See [policy-reference.md](policy-reference.md) for the full format.
 Each developer creates their key with `eyesonly keygen <name>`, which prints the public card
 you pass to `user add`.

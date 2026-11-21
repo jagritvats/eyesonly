@@ -139,7 +139,7 @@ grep -m1 -iE "error|fatal" "$SB/out" | sed 's/^/        git says: /'
 expect_fail "junior can't fetch it by ref name" in_ "$SB/junior" git fetch -q origin refs/heads/private/launch
 in_ "$SB/junior" as junior git checkout -q -b private/mine
 expect_reject "junior can't push to private/*" "rejected" in_ "$SB/junior" as junior git push -q origin private/mine
-in_ "$SB/junior" git checkout -q main
+in_ "$SB/junior" as junior git checkout -q main
 as alice git checkout -q main
 as alice git merge -q --no-ff -m "merge launch" private/launch
 expect_reject "merging private history into main is rejected" "narrower audience" as alice git push -q

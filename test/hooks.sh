@@ -114,7 +114,7 @@ check "working-tree .env is byte-identical" cmp "$SB/env.saved" .env
 in_ "$SB/bob" as bob git pull -q >/dev/null 2>&1
 in_ "$SB/bob" as bob $EYESONLY pull-policy 2>/dev/null
 OLD=$(in_ "$SB/bob" git rev-parse HEAD~1:.env)
-in_ "$SB/bob" git update-index --cacheinfo "100644,$OLD,.env"
+in_ "$SB/bob" as bob git update-index --cacheinfo "100644,$OLD,.env"
 expect_ok "bob commits an old carol-including blob staged via update-index (hook rekeys)" in_ "$SB/bob" as bob git commit -qm "restore old stripe key"
 expect_ok "the server accepts bob's rekeyed blob" in_ "$SB/bob" as bob git push -q
 srv_blob main:.env | grep -q '"carol"' && bad "bob's pushed envelope has carol" || ok "bob's pushed envelope has no carol key"

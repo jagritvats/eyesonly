@@ -48,6 +48,24 @@ just works: the pre-commit hook installed by `veil setup` re-seals it for its ne
 | `veil audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
 | `veil-server policy manifest app.git > m.json`, `veil policy-sign m.json > s.json`, `veil-server policy attest app.git s.json` | Admin signs the policy so a compromised server can't swap keys or add readers; clients pin the admin key on first contact (`VEIL_PIN_ADMIN=<fingerprint>` pins it up front) |
 
+## Merging protected files
+
+Every seal produces fresh ciphertext, so without help any two concurrent edits to `.env`
+would conflict inside the envelope. `veil setup` and `veil clone` register a merge driver
+(`merge=veil` in `.gitattributes`; older `filter=veil diff=veil` lines are upgraded in
+place). On `git merge`, `git rebase` or `git pull` it:
+
+1. verifies all three sides (signed by an allowed writer, bound to this path) and refuses
+   forged or moved envelopes, so a merge can't launder them under your signature;
+2. decrypts them into private temp files (`.git/veil/tmp`, removed right after) and runs
+   `git merge-file`;
+3. clean merge: re-seals the result for the file's audience, signed by you. Conflict: the
+   working file holds plaintext with conflict markers; fix it and `git add` re-encrypts it.
+
+If you can't read the file you get `you are not a reader` plus the list of readers; pick a
+side with `git checkout --ours/--theirs -- <path>`. Binary protected files aren't merged
+(pick a side). A modify/delete conflict never reaches the driver; git reports it as usual.
+
 ## How it works
 
 1. **Client filter** (`clean`/`smudge`): protected paths are sealed with AES-256-GCM.
@@ -70,6 +88,7 @@ bin/veil.mjs, bin/veil-server.mjs   CLIs
 src/crypto.mjs                      envelope format
 src/policy.mjs                      glob / ref / group matching
 src/client.mjs                      filters + developer commands
+src/merge.mjs                       merge driver for protected files
 src/server.mjs                      admin CLI, HTTP proxy, pre-receive hook
 test/e2e.sh                         adversarial suite
 site/index.html                     landing page

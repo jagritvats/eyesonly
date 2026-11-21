@@ -244,7 +244,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0                           # verify needs the base commit
-      - uses: jagritvats/eyesonly@v0.4
+      - uses: jagritvats/eyesonly@v0.5
         with:
           mode: verify
           # require-signed: true                    # see --require-signed above

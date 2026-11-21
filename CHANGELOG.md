@@ -8,6 +8,7 @@
 `grant --read-only` turns `writers` into an explicit list: members added later are read-only
 until granted `--writer`.
 
+- Fix: policy fetches, mode detection and admin-API reads retry on connection resets instead of failing (or guessing the wrong mode).
 - Identity in the OS keychain: `eyesonly keygen <name> --store keychain` and `eyesonly identity move --to keychain|file` keep the private identity in the macOS Keychain, Windows DPAPI or Linux Secret Service instead of `~/.eyesonly/identity.json`. The key reaches the keychain tools on stdin only; moves are read back and compared before the old copy is removed; the long-running filter reads it once per git command. Also `eyesonly identity show` and `eyesonly identity export --yes` (base64 for `EYESONLY_IDENTITY`). `doctor` warns about a plain-file key. `EYESONLY_IDENTITY` still wins.
 - `eyesonly audit --file <path> [--at <date|rev>] [--all-refs] [--json]`: who could read a file at a given moment, from the recipients (names and key ids) of the envelope version on the default branch (or every ref), plus the commit that introduced it. Follows renames across re-sealed envelopes.
 - `eyesonly audit <user>` now lists each version with first/last dates, takes `--since`/`--until`, and has `--json`.

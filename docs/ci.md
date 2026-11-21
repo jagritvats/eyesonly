@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0             # verify needs the base commit of the push or pull request
-      - uses: jagritvats/eyesonly@v0.4
+      - uses: jagritvats/eyesonly@v0.5
         with:
           mode: verify
 ```
@@ -166,7 +166,7 @@ jobs:
     env:
       EYESONLY_PIN_ADMIN: ${{ vars.EYESONLY_PIN_ADMIN }}   # omit if the policy isn't signed
     steps:
-      - uses: jagritvats/eyesonly@v0.4
+      - uses: jagritvats/eyesonly@v0.5
         with:
           url: https://git.example.com/app.git
           user: ci-bot

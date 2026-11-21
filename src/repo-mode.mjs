@@ -286,7 +286,13 @@ export async function cmdInit(args) {
   if (!NAME_RE.test(group)) die(`invalid group name '${group}'`);
   const globs = (o.files || '.env,secrets/**').split(',').map((s) => s.trim()).filter(Boolean);
   if (!globs.length) die('--files needs at least one path or glob');
-  const rules = { members: ['*'], admins: [id.name], groups: { [group]: [id.name] }, files: Object.fromEntries(globs.map((g) => [g, [`@${group}`]])) };
+  const rules = {
+    members: ['*'],
+    admins: [id.name],
+    groups: { [group]: [id.name] },
+    files: Object.fromEntries(globs.map((g) => [g, [`@${group}`]])),
+    branches: { 'refs/heads/private/': [`@${group}`] },
+  };
   const manifest = rp.buildRepoManifest({ repo: rp.newRepoId(), version: 1, policy: rules, keys: { [id.name]: cardOf(id) } });
   const att = rp.signRepoManifest(manifest, id);
   rp.writePolicyFile(top, att);
@@ -312,7 +318,7 @@ export async function cmdInit(args) {
     git(['add', '--', rp.POLICY_FILE, '.gitattributes'], { cwd: top });
     execFileSync('git', ['commit', '-q', '-m', 'eyesonly: init (signed policy, encrypted paths)'], { cwd: top, stdio: ['ignore', 'inherit', 'inherit'] });
   }
-  log(`initialized repo mode: ${globs.join(', ')} readable by @${group} (${id.name}). Admin fingerprint ${fp}`);
+  log(`initialized repo mode: ${globs.join(', ')} readable by @${group} (${id.name}); private/* branches sealed for @${group} (eyesonly branch push). Admin fingerprint ${fp}`);
   log(o.commit
     ? 'committed. Push it, then teammates run: eyesonly keygen <name> && eyesonly join (and send you the card)'
     : `next: git add ${rp.POLICY_FILE} .gitattributes && git commit -m "eyesonly: init" && git push`);
@@ -333,9 +339,9 @@ export function cmdJoin() {
 }
 
 export function cmdGrant(args) {
-  const o = flags(args, { card: String, 'from-request': Boolean, group: String, files: String, admin: Boolean });
+  const o = flags(args, { card: String, 'from-request': Boolean, group: String, files: String, branches: String, admin: Boolean });
   const name = o._[0];
-  if (!name || !NAME_RE.test(name)) die('usage: eyesonly grant <name> [--card <eyesonlypub1:...> | --from-request] [--group <g>] [--files <glob>] [--admin]');
+  if (!name || !NAME_RE.test(name)) die('usage: eyesonly grant <name> [--card <eyesonlypub1:...> | --from-request] [--group <g>] [--files <glob>] [--branches <prefix>] [--admin]');
   const top = repoTop();
   const id = loadIdentity();
   const { manifest: m } = editablePolicy(top);
@@ -364,8 +370,8 @@ export function cmdGrant(args) {
 
   const groups = Object.keys(rules.groups);
   let group = o.group;
-  if (!group && !o.files && !o.admin && !cardText) die(`nothing to change: pass --group <g>, --files <glob> or --admin`);
-  if (!group && !o.files && groups.length === 1) group = groups[0];
+  if (!group && !o.files && !o.branches && !o.admin && !cardText) die(`nothing to change: pass --group <g>, --files <glob>, --branches <prefix> or --admin`);
+  if (!group && !o.files && !o.branches && groups.length === 1) group = groups[0];
   const did = [];
   if (group) {
     if (!NAME_RE.test(group)) die(`invalid group name '${group}'`);
@@ -378,6 +384,14 @@ export function cmdGrant(args) {
     if (!rules.files[o.files].includes(name)) rules.files[o.files].push(name);
     did.push(o.files);
   }
+  if (o.branches) {
+    const prefix = rp.branchPrefix(o.branches);
+    if (!prefix) die(`invalid branch prefix '${o.branches}' (e.g. private/ or refs/heads/launch/)`);
+    rules.branches ||= {};
+    rules.branches[prefix] ||= [];
+    if (!rules.branches[prefix].includes(name)) rules.branches[prefix].push(name);
+    did.push(prefix.replace(/^refs\/heads\//, '') + '*');
+  }
   if (o.admin && !rules.admins.includes(name)) {
     rules.admins.push(name);
     did.push('admins');
@@ -385,14 +399,15 @@ export function cmdGrant(args) {
   const next = publish(top, m, rules, keys, id);
   if (fs.existsSync(reqPath)) fs.rmSync(reqPath);
   const readable = next.files.filter(([, who]) => who.includes(name)).map(([g]) => g);
-  log(`granted ${name}${did.length ? ` (${did.join(', ')})` : ''}: policy v${next.version}. ${name} can read: ${readable.join(', ') || 'nothing yet'}`);
+  const branches = (next.branches || []).filter(([, who]) => who.includes(name)).map(([p]) => p.replace(/^refs\/heads\//, '') + '*');
+  log(`granted ${name}${did.length ? ` (${did.join(', ')})` : ''}: policy v${next.version}. ${name} can read: ${readable.join(', ') || 'nothing yet'}${branches.length ? `; private branches ${branches.join(', ')}` : ''}`);
   log(`next: git add ${rp.POLICY_FILE}${o.files ? ' .gitattributes' : ''}${fs.existsSync(path.join(top, rp.REQUESTS_DIR)) ? ` ${rp.REQUESTS_DIR}` : ''} && git commit -m "eyesonly: grant ${name}", then \`eyesonly rekey\`, commit and push`);
 }
 
 export function cmdRevoke(args) {
-  const o = flags(args, { group: String });
+  const o = flags(args, { group: String, branches: String });
   const name = o._[0];
-  if (!name) die('usage: eyesonly revoke <name> [--group <g>]');
+  if (!name) die('usage: eyesonly revoke <name> [--group <g> | --branches <prefix>]');
   const top = repoTop();
   const id = loadIdentity();
   const { manifest: m } = editablePolicy(top);
@@ -403,18 +418,23 @@ export function cmdRevoke(args) {
   if (o.group) {
     if (!rules.groups[o.group]) die(`no group '${o.group}'`);
     rules.groups[o.group] = drop(rules.groups[o.group]);
+  } else if (o.branches) {
+    const prefix = rp.branchPrefix(o.branches);
+    if (!prefix || !rules.branches?.[prefix]) die(`no branch rule '${o.branches}'`);
+    rules.branches[prefix] = drop(rules.branches[prefix]);
   } else {
     if (!keys[name]) die(`'${name}' isn't in the policy`);
     if (rules.admins.length === 1 && rules.admins[0] === name) die(`'${name}' is the only admin; grant another admin first`);
     for (const g of Object.keys(rules.groups)) rules.groups[g] = drop(rules.groups[g]);
     for (const f of Object.keys(rules.files)) rules.files[f] = drop(rules.files[f]);
+    for (const b of Object.keys(rules.branches || {})) rules.branches[b] = drop(rules.branches[b]);
     rules.admins = drop(rules.admins);
     delete keys[name];
   }
   const next = publish(top, m, rules, keys, id);
-  log(`revoked ${name}${o.group ? ` from @${o.group}` : ''}: policy v${next.version}`);
+  log(`revoked ${name}${o.group ? ` from @${o.group}` : o.branches ? ` from ${o.branches}` : ''}: policy v${next.version}`);
   log(`next: git add ${rp.POLICY_FILE} && git commit -m "eyesonly: revoke ${name}", then \`eyesonly rekey\`, commit and push`);
-  log(`revocation isn't retroactive: rotate what ${name} could read (\`eyesonly audit ${name}\`)`);
+  log(`revocation isn't retroactive: rotate what ${name} could read (\`eyesonly audit ${name}\`). Private branches are re-sealed without ${name} on their next \`eyesonly branch push\`.`);
 }
 
 export function cmdPolicy([sub]) {
@@ -429,6 +449,10 @@ export function cmdPolicy([sub]) {
   for (const [g, who] of Object.entries(rules.groups)) console.log(`  @${g}: ${who.join(', ') || '(empty)'}`);
   console.log('files (first match wins):');
   for (const [glob, who] of m.files) console.log(`  ${glob}  ${JSON.stringify(rules.files[glob])} -> ${who.join(', ') || '(nobody)'}`);
+  if (m.branches?.length) {
+    console.log('private branches (sealed, longest prefix wins):');
+    for (const [prefix, who] of m.branches) console.log(`  ${prefix}*  ${JSON.stringify(rules.branches[prefix])} -> ${who.join(', ') || '(nobody)'}`);
+  }
   console.log('members:');
   for (const [u, k] of Object.entries(m.keys)) console.log(`  ${u}  ${vc.fingerprint(k)}`);
   const req = path.join(top, rp.REQUESTS_DIR);

@@ -18,11 +18,11 @@ B=$'\e[1m' D=$'\e[2m' G=$'\e[32m' R=$'\e[31m' Y=$'\e[33m' N=$'\e[0m'
 step() { printf '\n%s== %s%s\n' "$B" "$1" "$N"; }
 say()  { printf '%s%s$%s %s\n' "$D" "$1" "$N" "$2"; }
 as() { local u="$1"; shift; EYESONLY_HOME="$SB/home/$u" GIT_AUTHOR_NAME=$u GIT_AUTHOR_EMAIL=$u@example.com GIT_COMMITTER_NAME=$u GIT_COMMITTER_EMAIL=$u@example.com "$@"; }
-declare -A TOK
-url() { echo "http://$1:${TOK[$1]}@127.0.0.1:$PORT/app.git"; }
+# Plain variables, not an associative array: macOS ships bash 3.2.
+url() { local t="TOK_$1"; echo "http://$1:${!t}@127.0.0.1:$PORT/app.git"; }
 
 step "Setup: a server, two users, one policy"
-for u in alice junior; do TOK[$u]=$($EOS user add "$(as $u $EO keygen $u 2>/dev/null)" 2>/dev/null); done
+for u in alice junior; do printf -v "TOK_$u" %s "$($EOS user add "$(as $u $EO keygen $u 2>/dev/null)" 2>/dev/null)"; done
 $EOS repo create app.git --admin alice 2>/dev/null
 $EOS policy set app.git - 2>/dev/null <<'EOF'
 { "members": ["*"], "admins": ["alice"],

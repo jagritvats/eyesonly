@@ -50,7 +50,8 @@ npm i -g eyesonly                      # https://www.npmjs.com/package/eyesonly 
 brew install jagritvats/tap/eyesonly   # macOS / Linux, same CLIs
 ```
 
-Client and server are tested on Linux, macOS and Windows (Git for Windows) on every commit.
+Client and server run on Linux, macOS and Windows (Git for Windows); CI runs every suite
+and the demo on all three.
 
 ## Quickstart: GitHub mode (no server)
 

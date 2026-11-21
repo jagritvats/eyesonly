@@ -5,6 +5,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/test/lib/compat.sh"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 PORT2=$((PORT + 1))
@@ -42,8 +43,11 @@ body() {
 # post <user> <bodyfile> <outfile> [curl args...]: prints the HTTP status
 post() {
   local u="$1" f="$2" o="$3"; shift 3
+  rm -f "$o"   # never judge a request by the previous response
+  # No `Expect: 100-continue`: when the server answers 413 early and closes, some curl builds
+  # (macOS) report the interim 100 as the status.
   curl -s -o "$o" -w '%{http_code}' --data-binary @"$f" -H 'Content-Type: application/x-git-upload-pack-request' \
-    "$@" -u "$u:${TOK[$u]}" "$BASE/app.git/git-upload-pack"
+    -H 'Expect:' "$@" -u "$u:${TOK[$u]}" "$BASE/app.git/git-upload-pack"
 }
 code_is() { local d="$1" want="$2" got="$3" o="$4" pat="${5:-}"; if [[ "$got" == "$want" ]] && { [[ -z "$pat" ]] || grep -q -- "$pat" "$o"; }; then ok "$d"; else bad "$d (got $got, want $want${pat:+ + '$pat'})"; head -c 300 "$o" | sed 's/^/        /'; echo; fi; }
 
@@ -133,7 +137,7 @@ C=$(post junior "$R/empty" "$R/o"); code_is "empty body -> 400" 400 "$C" "$R/o" 
 printf 'not gzip' > "$R/notgz"
 C=$(post junior "$R/notgz" "$R/o" -H 'Content-Encoding: gzip'); code_is "invalid gzip -> 400" 400 "$C" "$R/o" "not valid gzip"
 C=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/healthz"); [[ "$C" == 200 ]] && ok "server still healthy after malformed requests" || bad "healthz $C"
-head -c 11M /dev/zero > "$R/big"
+head -c $((11 * 1024 * 1024)) /dev/zero > "$R/big"   # no "11M" suffix: BSD head lacks it
 C=$(post junior "$R/big" "$R/o"); code_is "11 MiB body (Content-Length) -> 413" 413 "$C" "$R/o" "larger than"
 C=$(post junior "$R/big" "$R/o" -H 'Transfer-Encoding: chunked'); code_is "11 MiB chunked body (no Content-Length) -> 413" 413 "$C" "$R/o" "larger than"
 gzip -c "$R/big" > "$R/big.gz"
@@ -201,8 +205,8 @@ HAVES=()
 for _ in $(seq 190); do HAVES+=("have $(rand_sha)"); done
 for c in "$PRIV" $(git rev-list main); do HAVES+=("have $c"); done   # PRIV first: unfiltered, it would be the one ACKed
 body "$R/perf" negotiate "${HAVES[@]}"
-T0=$(date +%s%N); C=$(post junior "$R/perf" "$R/o"); T1=$(date +%s%N)
-MS=$(((T1 - T0) / 1000000))
+T0=$(now_ms); C=$(post junior "$R/perf" "$R/o"); T1=$(now_ms)
+MS=$((T1 - T0))
 if [[ "$C" == 200 && $MS -lt 2000 ]] && ! grep -q "ACK $PRIV" "$R/o" && grep -q "ACK $MAIN" "$R/o"; then ok "${#HAVES[@]} have lines filtered in ${MS} ms (< 2000)"; else bad "perf: ${#HAVES[@]} haves took ${MS} ms (code $C)"; fi
 
 echo

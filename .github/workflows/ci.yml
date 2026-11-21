@@ -7,16 +7,30 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: [22, 24]
+    defaults:
+      run:
+        shell: bash   # Git Bash on Windows
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
-      - run: git --version && bash --version | head -1
+      # The suites need bash >= 4 (macOS ships 3.2). The demo itself runs on 3.2, checked below.
+      - if: runner.os == 'macOS'
+        run: brew install bash && echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+      - run: git --version && bash --version | head -1 && node --version
       - run: npm test
       - run: npm run demo
+      - name: demo on macOS's stock bash 3.2 (what `npx eyesonly demo` uses there)
+        if: runner.os == 'macOS'
+        run: /bin/bash examples/demo.sh
+      - name: demo from PowerShell (Git for Windows' bash, not WSL's)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: node bin/eyesonly.mjs demo

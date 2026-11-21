@@ -10,15 +10,17 @@ it.
   The signed policy is committed in `.eyesonly/policy.json`. Clients and CI check every
   commit. Guide: [github-mode.md](github-mode.md).
 - **Server mode:** a small Node service in front of your repos. It holds the policy, checks
-  every push before storing it, and hides private branches. GitHub can stay as a mirror for
+  every push before storing it, and hides private branches altogether. GitHub can stay as a mirror for
   PRs and CI. Guide: [server-deployment.md](server-deployment.md).
 
 ## Which mode do I need?
 
 Start with GitHub mode unless one of these is true:
 
-- **You need private branches** (a launch branch only three people can see). Only the server
-  hides refs.
+- **A private branch must be invisible,** not just unreadable. GitHub mode seals private
+  branches (`eyesonly branch push`): the host can't read the name, commits or files, but it
+  sees that a sealed ref exists, its size and when it changes, and any writer can delete it.
+  Only the server hides refs altogether.
 - **A plaintext secret must never reach the host,** even from someone who skips or removes the
   client. In GitHub mode the pre-push hook stops honest mistakes and CI catches the rest, but a
   push made without the client is readable on the host until you rotate.
@@ -37,7 +39,7 @@ Start with GitHub mode unless one of these is true:
 | Plaintext push by someone without the client | detected by the required `eyesonly verify` check; already readable on the host | rejected before it's stored |
 | Writes attributed to | the envelope's signer | the authenticated pusher |
 | Deleting a protected file | reported by `verify`, not refused | refused for non-writers |
-| Private branches | not yet | invisible to non-members, even by SHA |
+| Private branches | sealed on the host: name, commits and author encrypted; size and push times visible | invisible to non-members, even by SHA |
 | Read-only members, protected refs | your host's settings | built in (`writers`, `protect`) |
 | Access tokens, a service to run and back up | none | yes |
 | Mirror to GitHub/GitLab for PRs and CI | not needed | built in (verified public refs only) |

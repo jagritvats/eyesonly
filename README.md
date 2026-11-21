@@ -13,8 +13,9 @@
 
 **Private files and built-in secrets in the GitHub repo you already have.** `.env` and
 `secrets/**` are encrypted for the people the policy names, and everyone keeps the stock `git`
-client. No server needed to start. Add the Eyes Only server when you want private branches
-and plaintext pushes rejected before they're stored. Zero runtime dependencies (Node ≥ 22 + git).
+client. Private branches work too, sealed on the host. No server needed to start; add the
+Eyes Only server when private branches must be invisible and plaintext pushes rejected before
+they're stored. Zero runtime dependencies (Node ≥ 22 + git).
 
 ```
 alice$ cat .env          →  STRIPE_SECRET=sk_live_456
@@ -121,7 +122,7 @@ Secrets already committed in plaintext? The server rejects that history; see
 | Plaintext push from a laptop with the client | blocked (pre-push hook) | rejected |
 | Plaintext push from someone without the client | caught by CI; already visible to repo readers | rejected before it's stored |
 | Who changed a secret | the envelope's signer | the authenticated pusher |
-| Private branches | not yet | invisible to non-members |
+| Private branches | sealed: name, commits and author encrypted on the host | invisible to non-members |
 | Something to run | nothing | one small Node service |
 
 Same commands in both. The mode is detected per clone, and a remote that is an Eyes Only
@@ -142,6 +143,7 @@ pre-commit hook re-seals it for its new path.
 | `eyesonly audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
 | `eyesonly init` · `join` · `grant` · `revoke` · `policy show` | GitHub mode: start, ask for access, give or remove it, see who can read what |
 | `eyesonly verify` | GitHub mode: check commits like the server would (pre-push hook and CI) |
+| `eyesonly branch push` · `pull` · `list` · `publish` · `delete` | GitHub mode: private branches (e.g. `private/*`) sealed on the host, squash-published when they ship ([guide](docs/github-mode.md#private-branches)) |
 | `eyesonly setup --remote <name>` | Use a remote other than `origin` (remembered) |
 | `EYESONLY_IDENTITY` | Your identity JSON (or base64 of it) from the environment, for CI and containers ([CI guide](docs/ci.md)) |
 | `eyesonly-server init` · `user add` · `user set-key` · `policy set` | Server: bootstrap, users, keys, policy ([deployment](docs/server-deployment.md)) |

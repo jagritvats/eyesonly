@@ -100,6 +100,49 @@ eyesonly audit carol                               # what to rotate
 Revocation isn't retroactive: carol keeps whatever she could already decrypt, including old
 versions in history. Rotate it. The only admin can't be revoked until another admin exists.
 
+## Private branches
+
+A branch under a private prefix of the policy (`eyesonly init` creates `private/` for your
+core group) never goes to the host as a git branch. `eyesonly branch push` seals it: the
+commits since the default branch are bundled, encrypted for the branch's audience and signed
+by you, and stored as one opaque ref, `refs/eyesonly/b/<random id>`.
+
+```bash
+git checkout -b private/launch
+# ...work, commit as usual...
+eyesonly branch push                     # seal and push (v1, v2, ... on every push)
+eyesonly branch pull                     # teammates: fetch, verify and update private/launch
+eyesonly branch list                     # what you can read, versions, who sealed it, sync state
+eyesonly branch publish private/launch   # squash it into main when it ships, then git push
+eyesonly branch delete private/launch    # remove the sealed ref from the host
+```
+
+Readers get the same commit ids as the writer. Before updating a branch, `pull` checks that
+the version is signed by someone allowed to write that prefix under the current policy, that
+it's bound to its own ref, and that it isn't older than, or a fork of, the version you already
+have (versions are pinned per clone in `.git/eyesonly/branches.json`). A rolled-back,
+replayed, forged or moved version is refused; a writer's next `branch push` replaces it.
+If your local branch and the sealed one diverged, the sealed version lands in
+`<name>-incoming` for you to merge.
+
+**Guards.** The pre-push hook refuses `git push origin private/launch` (it would put the
+branch on the host in plaintext), and refuses pushing a public branch that contains commits
+made on a private branch: squash them in with `eyesonly branch publish` instead. Commits made
+on `main` before you branched don't count as private. The publish commit gets its own
+message, so private commit messages stay private too.
+
+**What the host and other repo readers see:** that a sealed ref exists, its size, and when it
+was pushed. Not the branch name, commit messages, files or authors: the sealed commit is
+authored by `eyesonly <eyesonly@localhost>` at a fixed date, and the writer's signature is
+inside the ciphertext. The envelope lists its recipients, which is the prefix's audience from
+the policy file everyone can already read. Any writer of the repo can delete or overwrite a
+sealed ref (readers detect rollback, not deletion), and the host keeps old ciphertext. With
+the server, private branches are invisible altogether.
+
+Admins change who can read and write a prefix with `eyesonly grant <name> --branches private/`
+and `eyesonly revoke <name> --branches private/`. The next `branch push` seals for the new
+audience; versions sealed before stay readable by whoever had them, like any secret.
+
 ## Check commits: `eyesonly verify`
 
 ```bash
@@ -140,8 +183,7 @@ secrets:
 name: eyesonly
 on:
   pull_request:
-  push:
-    branches: [main]
+  push:                                            # every branch: a plaintext private/* push is flagged
 permissions:
   contents: read
 jobs:
@@ -156,7 +198,10 @@ jobs:
           mode: verify
 ```
 
-A copy is in [examples/eyesonly-verify.yml](examples/eyesonly-verify.yml). In the repo's
+In verify mode the Action also checks that the pushed branch isn't a private branch pushed in
+plaintext (`eyesonly verify --ref`), and that every sealed ref on the host is one encrypted
+envelope bound to its ref (`eyesonly verify --sealed origin`; turn it off with
+`sealed: false`). A copy is in [examples/eyesonly-verify.yml](examples/eyesonly-verify.yml). In the repo's
 settings, mark `eyesonly / verify` as required (Rules or Branch protection). On GitLab or
 elsewhere, run `npx eyesonly verify --range <base>..<head>` in the pipeline the same way.
 
@@ -172,7 +217,7 @@ To read secrets in CI as well, see [ci.md](ci.md#github-mode-read-secrets-in-ci)
 | Plaintext push by someone **with** the client | blocked by the pre-push hook | rejected by the server |
 | Plaintext push by someone **without** the client | **detected**, not prevented: CI fails, but the plaintext is already readable by everyone with repo access. Rotate it | rejected before it's stored |
 | Who changed or deleted a file | attributed to the envelope signer; deletions are reported, not refused | the authenticated pusher |
-| Private branches | not yet (planned: encrypted branches; name, size and timing stay visible) | invisible to non-members |
+| Private branches | sealed on the host: name, content and author hidden; size and push times visible; rollback refused | invisible to non-members |
 | Force-push / rewind protection | your host's branch protection | built in |
 
 Detection becomes prevention for the default branch once you protect it and require the

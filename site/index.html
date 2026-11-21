@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Eyes Only: private files, private branches and secrets for git</title>
-<meta name="description" content="Eyes Only adds per-user access control to git: encrypted files, invisible branches and built-in secrets, enforced by the server and compatible with stock git.">
+<meta name="description" content="Encrypted .env files and secrets in the GitHub repo you already have, readable only by the people you name. No server to start; add the Eyes Only server for private branches and pushes rejected before they're stored. Stock git client.">
 <meta property="og:title" content="Eyes Only: private files, private branches and secrets for git">
-<meta property="og:description" content="Per-person access inside one git repo. Enforced by the server, with the stock git client.">
+<meta property="og:description" content="Encrypted secrets in the GitHub repo you already have, no server needed. Add the server for private branches and hard enforcement. Stock git client.">
 <meta property="og:image" content="https://jagritvats.github.io/eyesonly/assets/og.png">
 <meta property="og:url" content="https://jagritvats.github.io/eyesonly/">
 <meta property="og:type" content="website">
@@ -86,7 +86,7 @@
   footer { padding: 40px 0 64px; color: var(--dim); font-size: 14px; border-top: 1px solid var(--line); }
 
   @media (max-width: 820px) {
-    .split, .cards, .price, .limits { grid-template-columns: 1fr; }
+    .split, .cards, .cards.two, .price, .limits { grid-template-columns: 1fr; }
     nav .links { display: none; }
     td:first-child { width: auto; }
   }
@@ -97,6 +97,11 @@
   h3.qs { font-size: 17px; margin: 28px 0 10px; }
   .qs-note { color: var(--dim); font-size: 14px; margin: 12px 0 0; }
   .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+  .cards.two { grid-template-columns: repeat(2, 1fr); }
+  .tablewrap { overflow-x: auto; }
+  .mode { display: inline-block; font: 600 11px var(--mono); letter-spacing: .04em; text-transform: uppercase;
+          padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); margin-left: 8px; vertical-align: 2px; }
+  .mode.gh { color: var(--accent); border-color: var(--accent); }
   .badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 0; }
   .badges img { height: 20px; display: block; }
 </style>
@@ -112,17 +117,18 @@
 
   <header>
     <h1>Git, but not <em>all-or-nothing</em>.</h1>
-    <p class="lede">Eyes Only adds private files, private branches and built-in secrets to any git repo.
-      Your <code>.env</code> lives next to the code, encrypted for the people who should read it. The server
-      enforces the rules, so nobody can push around them, and everyone keeps using plain <code>git</code>.</p>
+    <p class="lede">Works on the GitHub repo you already have, with no server to run. Your <code>.env</code>
+      lives next to the code, encrypted for the people who should read it, and everyone keeps using plain
+      <code>git</code>. When you need private branches and pushes rejected before they're stored, add the
+      Eyes Only server. Same commands.</p>
     <div class="cta">
-      <a class="btn primary" href="#start">Get started</a>
-      <a class="btn" href="#attacks">See what we tried to break</a>
+      <a class="btn primary" href="#start">Start on GitHub in 2 minutes</a>
+      <a class="btn" href="#modes">GitHub mode or server?</a>
       <a class="btn" href="https://github.com/jagritvats/eyesonly">GitHub</a>
       <a class="btn" href="https://www.npmjs.com/package/eyesonly">npm</a>
     </div>
     <div class="badges"><a href="https://www.npmjs.com/package/eyesonly"><img alt="npm version" src="https://img.shields.io/npm/v/eyesonly?color=7ee0b5&amp;label=npm"></a> <a href="https://github.com/jagritvats/eyesonly/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jagritvats/eyesonly/actions/workflows/ci.yml/badge.svg"></a></div>
-    <div class="install">$ <code>npx eyesonly demo</code> · try it locally in 30s · zero dependencies · MIT · 450 attack tests</div>
+    <div class="install">$ <code>npx eyesonly demo</code> · try it locally in 30s · zero dependencies · MIT · 696 attack tests · Linux, macOS, Windows</div>
 
     <div class="split" aria-label="Same repository, two developers">
       <div class="term">
@@ -140,42 +146,68 @@ a1f3…  refs/heads/main
         <div class="bar"><b>junior</b><span>contractor</span></div>
 <pre><span class="p">$</span> cat .env
 <span class="y">EYESONLY-V1 {"path":".env","keys":{"alice":…</span>
-<span class="p">$</span> git ls-remote origin
+<span class="p">$</span> git push   <span class="p"># with plaintext .env</span>
+<span class="no">[eyesonly] REJECTED: '.env' is NOT encrypted.
+       Refusing to store a plaintext secret.</span>
+<span class="p">$</span> git ls-remote origin   <span class="p"># with the server</span>
 a1f3…  refs/heads/main
 <span class="p">$</span> git fetch origin 9c0e…
 <span class="no">error: Server does not allow request
-       for unadvertised object 9c0e…</span>
-<span class="p">$</span> git push   <span class="p"># with plaintext .env</span>
-<span class="no">[eyesonly] REJECTED: 'junior' may not modify
-       protected file '.env'</span></pre>
+       for unadvertised object 9c0e…</span></pre>
       </div>
     </div>
   </header>
 
   <section id="how">
-    <h2>Three layers, stock git</h2>
+    <h2>One client, two ways to enforce</h2>
     <p class="sub">A commit hashes its whole tree, so git can't leave a file out for one person. Eyes Only keeps the
-      tree identical for everyone and controls who can <em>read</em> the blobs, who can <em>see</em> each ref, and
-      what the server will <em>accept</em>.</p>
-    <div class="cards">
-      <div class="card"><div class="k">01 · client</div><h3>Encrypted files</h3>
+      tree identical for everyone and controls who can <em>read</em> the blobs, then checks every commit: on each
+      laptop and in CI in GitHub mode, or on the server before anything is stored.</p>
+    <div class="cards two">
+      <div class="card"><div class="k">everywhere · client</div><h3>Encrypted files</h3>
         <p>A clean/smudge filter seals protected paths with AES-256-GCM, wraps the key per reader with X25519
            and signs it with Ed25519. Unchanged files don't churn, and <code>git diff</code> shows plaintext to readers.</p></div>
-      <div class="card"><div class="k">02 · proxy</div><h3>Invisible branches</h3>
-        <p>An authenticating smart-HTTP proxy hides <code>private/*</code> from everyone outside the audience.
-           It forces protocol v0 so hidden commits can't be fetched by SHA, and serves no dumb HTTP.</p></div>
-      <div class="card"><div class="k">03 · hook</div><h3>Server-side enforcement</h3>
-        <p>A pre-receive hook checks every commit against the server's policy: no plaintext secrets, no
-           unauthorized edits, no forged or replayed ciphertext, and no private history merged into <code>main</code>.</p></div>
+      <div class="card"><div class="k">everywhere · policy</div><h3>A signed policy</h3>
+        <p>Who reads and writes which path, plus everyone's public key, signed by an admin. Clients refuse
+           unsigned changes, rollbacks and a policy loosened on a feature branch, and pin the admin key.</p></div>
+      <div class="card"><div class="k">GitHub mode · verify</div><h3>Checked before merge</h3>
+        <p><code>eyesonly verify</code> runs the server's checks in a pre-push hook and as a required CI check:
+           no plaintext secrets, no forged or moved ciphertext, no unsigned policy edits reach <code>main</code>.</p></div>
+      <div class="card"><div class="k">server · proxy + hook</div><h3>Rejected before it's stored</h3>
+        <p>An authenticating proxy hides <code>private/*</code> (protocol v0, so hidden commits can't be fetched by
+           SHA), and a pre-receive hook refuses plaintext, unauthorized edits and private history merged into <code>main</code>.</p></div>
+    </div>
+  </section>
+
+  <section id="modes">
+    <h2>GitHub mode or server?</h2>
+    <p class="sub">Start with GitHub mode. Add the server when you need branches only some people can see, or a
+      plaintext secret must never reach the host, even from someone who skips the client.</p>
+    <div class="tablewrap"><table class="compare">
+      <thead><tr><th></th><th>GitHub mode</th><th>Server</th></tr></thead>
+      <tbody>
+        <tr><td>Files encrypted per reader (the host can't read them)</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+        <tr><td>Readers reject forged or unauthorized secrets</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+        <tr><td>Signed policy, no rollback, no loosening on a branch</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+        <tr><td>Plaintext push from a laptop with the client</td><td class="yes">blocked</td><td class="yes">rejected</td></tr>
+        <tr><td>Plaintext push from someone without the client</td><td class="nope">caught in CI, already on the host</td><td class="yes">rejected before it's stored</td></tr>
+        <tr><td>Private branches</td><td class="nope">not yet</td><td class="yes">invisible to non-members</td></tr>
+        <tr><td>Something to run</td><td class="yes">nothing</td><td class="nope">one small Node service</td></tr>
+      </tbody>
+    </table></div>
+    <div class="cta">
+      <a class="btn" href="https://jagritvats.github.io/eyesonly/docs/choosing-a-mode/">Choosing a mode</a>
+      <a class="btn" href="https://jagritvats.github.io/eyesonly/docs/github-mode/">GitHub mode guide</a>
     </div>
   </section>
 
   <section id="attacks">
     <h2>We tried to break it</h2>
-    <p class="sub">The client is a convenience; the server is the security boundary. Each row below is a check
-      in <code>npm test</code>, run against a real server with an attacker who controls their own git client.</p>
+    <p class="sub">Each row below is a check in <code>npm test</code>, run against real repos and a real server
+      with an attacker who controls their own git client, on Linux, macOS and Windows. Rows about refs and pushes
+      need the server; in GitHub mode, <code>eyesonly verify</code> applies the same content checks before merge.</p>
     <div class="score">
-      <div>615<small>adversarial e2e checks</small></div>
+      <div>696<small>adversarial e2e checks</small></div>
       <div>0<small>runtime dependencies</small></div>
       <div>3<small>common git-proxy footguns we test for</small></div>
     </div>
@@ -192,7 +224,8 @@ a1f3…  refs/heads/main
         <tr><td>Delete a protected file</td><td>Deletion counts as a modification.</td><td class="res">rejected</td></tr>
         <tr><td>Merge <code>private/launch</code> into <code>main</code></td><td>Commits from a narrower-audience branch can't become public; squash merges are fine.</td><td class="res">rejected</td></tr>
         <tr><td>Push to <code>private/*</code> or list it</td><td>Per-user ref hiding plus branch write rules.</td><td class="res">invisible</td></tr>
-        <tr><td>Grant yourself access by editing the policy</td><td>The policy lives on the server, not in the repo.</td><td class="res">n/a</td></tr>
+        <tr><td>Grant yourself access by editing the policy</td><td>Server: the policy isn't in the repo. GitHub mode: it's signed by an admin, read only from the default branch, and unsigned edits fail <code>verify</code>.</td><td class="res">refused</td></tr>
+        <tr><td>Roll the committed policy back to an older version</td><td>Clients pin the admin key and the last version they saw; older or re-signed versions are refused.</td><td class="res">refused</td></tr>
         <tr><td>Server swaps a teammate's key, rolls the policy back or adds a reader</td><td>Admins sign the policy; clients pin the admin key and accept only signed keys and newer versions.</td><td class="res">refused</td></tr>
         <tr><td>Probe whether a private commit exists with <code>have &lt;sha&gt;</code></td><td>Proxy drops negotiation lines for commits you can't see, so the reply matches a nonexistent SHA.</td><td class="res">no oracle</td></tr>
         <tr><td>Keep reading after being removed</td><td><code>eyesonly rekey</code> drops you; hook rejects envelopes with stale recipients.</td><td class="res">locked out</td></tr>
@@ -206,6 +239,7 @@ a1f3…  refs/heads/main
     <div class="limits">
       <div><b>Revocation isn't retroactive</b><span>Someone who could read a secret has seen it. <code>eyesonly audit &lt;user&gt;</code> lists exactly what to rotate.</span></div>
       <div><b>File names and timestamps are visible</b><span>Outsiders see that <code>.env</code> exists and when it changed, but not what's in it.</span></div>
+      <div><b>GitHub mode detects, the server prevents</b><span>Without a server, a plaintext push from someone who skips the client is on the host until CI flags it. Rotate it.</span></div>
       <div><b>The server sees private branches</b><span>It never sees file plaintext, but private refs are ordinary objects on the server.</span></div>
       <div><b>Run it behind TLS</b><span>Tokens are bearer credentials. Put Caddy or nginx in front.</span></div>
     </div>
@@ -213,39 +247,57 @@ a1f3…  refs/heads/main
 
   <section>
     <h2>Compared with</h2>
-    <table class="compare">
-      <thead><tr><th></th><th>Eyes Only</th><th>git-crypt / sops</th><th>Separate repos</th><th>Vault / Doppler</th></tr></thead>
+    <div class="tablewrap"><table class="compare">
+      <thead><tr><th></th><th>Eyes Only, GitHub mode</th><th>Eyes Only, server</th><th>git-crypt / sops</th><th>Separate repos</th><th>Vault / Doppler</th></tr></thead>
       <tbody>
-        <tr><td>Secrets versioned with the code</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">no</td></tr>
-        <tr><td>Per-file, per-person read access</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td><td class="yes">✓</td></tr>
-        <tr><td>Server blocks plaintext pushes</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">n/a</td><td class="nope">n/a</td></tr>
-        <tr><td>Per-person write control on secrets</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">n/a</td><td class="yes">✓</td></tr>
-        <tr><td>Private branches in the same repo</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">no</td><td class="nope">no</td></tr>
-        <tr><td>No extra service at runtime</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td></tr>
+        <tr><td>Secrets versioned with the code</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">no</td></tr>
+        <tr><td>Per-file, per-person read access</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td><td class="yes">✓</td></tr>
+        <tr><td>Plaintext pushes stopped</td><td class="yes">pre-push + CI</td><td class="yes">✓ on the server</td><td class="nope">no</td><td class="nope">n/a</td><td class="nope">n/a</td></tr>
+        <tr><td>Forged or unauthorized secrets refused</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">n/a</td><td class="yes">✓</td></tr>
+        <tr><td>Private branches in the same repo</td><td class="nope">not yet</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">no</td><td class="nope">no</td></tr>
+        <tr><td>Nothing extra to host</td><td class="yes">✓</td><td class="nope">no</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td></tr>
       </tbody>
-    </table>
+    </table></div>
   </section>
 
   <section id="start">
     <h2>Quickstart</h2>
-    <p class="sub">Five minutes on your own box. Production setups put the server behind TLS.
-      Already have a repo? Skip to <a href="#existing">existing repos</a>.</p>
+    <p class="sub">Install once: <code>npm i -g eyesonly</code> or <code>brew install jagritvats/tap/eyesonly</code>
+      (Node 22+, git 2.40+, Linux, macOS, Windows). Then pick a mode; the commands afterwards are the same.</p>
 
-    <h3 class="qs">1. Server</h3>
-<div class="code"><span class="p"># install once: npm i -g eyesonly   (Node 22+, git 2.40+, macOS / Linux / Windows)</span>
-eyesonly keygen alice                                     <span class="p"># the admin's own identity</span>
+    <h3 class="qs">GitHub mode <span class="mode gh">2 minutes · no server</span></h3>
+<div class="code"><span class="p"># admin, in the repo you already have (GitHub, GitLab, any git host)</span>
+eyesonly keygen alice
+eyesonly init --commit                <span class="p"># encrypts .env and secrets/** for @core</span>
+git push
+
+<span class="p"># each teammate</span>
+eyesonly keygen bob
+eyesonly clone git@github.com:acme/app.git &amp;&amp; cd app
+eyesonly join                         <span class="p"># commit .eyesonly/requests/bob.pub in a pull request</span>
+
+<span class="p"># admin, once the request is merged</span>
+eyesonly grant bob --from-request &amp;&amp; git add .eyesonly &amp;&amp; git commit -m "grant bob"
+eyesonly rekey &amp;&amp; git commit -am "rekey" &amp;&amp; git push
+
+<span class="p"># bob</span>
+git pull &amp;&amp; eyesonly pull-policy      <span class="p"># .env is now plaintext for bob only</span></div>
+    <p class="qs-note">Then make <code>eyesonly verify</code> a required check
+      (<a href="https://github.com/jagritvats/eyesonly/blob/main/docs/examples/eyesonly-verify.yml">workflow</a>, no secrets),
+      so nothing unverified merges into <code>main</code>.</p>
+
+    <h3 class="qs">Add the server <span class="mode">when you need hard guarantees</span></h3>
+<div class="code">eyesonly keygen alice                                     <span class="p"># the admin's own identity</span>
 eyesonly-server init --admin "$(eyesonly whoami | tail -1)" --repo app.git
 eyesonly-server serve --port 8787                          <span class="p"># init printed alice's token</span>
 <span class="p"># starter policy: @core reads .env and secrets/**, private/* branches are @core-only</span>
-<span class="p"># or with automatic HTTPS: docker compose up -d   (deploy/ in the repo)</span></div>
+<span class="p"># or with automatic HTTPS: docker compose up -d   (deploy/ in the repo)</span>
 
-    <h3 class="qs">2. Each developer</h3>
-<div class="code">eyesonly keygen alice                 <span class="p"># send the printed card to your admin, get a token</span>
-eyesonly clone https://alice:&lt;token&gt;@git.example.com/app.git
-<span class="p"># ...then it's just git</span></div>
+<span class="p"># each developer: send your card (eyesonly keygen) to the admin, get a token</span>
+eyesonly clone https://alice:&lt;token&gt;@git.example.com/app.git</div>
 
-    <h3 class="qs" id="existing">Already have a repo or a clone?</h3>
-<div class="code"><span class="p"># move a GitHub repo onto Eyes Only (GitHub stays as a second remote)</span>
+    <h3 class="qs" id="existing">Moving an existing repo onto the server?</h3>
+<div class="code"><span class="p"># GitHub stays as a second remote</span>
 git remote rename origin github
 git remote add origin https://alice:&lt;token&gt;@git.example.com/app.git
 git push -u origin --all &amp;&amp; git push origin --tags
@@ -254,10 +306,11 @@ eyesonly setup &amp;&amp; git add .gitattributes &amp;&amp; git commit -m "eyeso
 <span class="p"># teammate with an existing clone: pull first, then setup</span>
 git remote set-url origin https://bob:&lt;token&gt;@git.example.com/app.git
 git pull &amp;&amp; eyesonly setup</div>
-    <p class="qs-note">Secrets already committed in plaintext? The server rejects that history;
-      the guide shows how to rotate and strip it.</p>
+    <p class="qs-note">Secrets already committed in plaintext? Rotate them; the guide shows how to strip them
+      from history (the server rejects that history until you do).</p>
     <div class="cta">
       <a class="btn primary" href="https://jagritvats.github.io/eyesonly/docs/">Read the guides</a>
+      <a class="btn" href="https://jagritvats.github.io/eyesonly/docs/github-mode/">GitHub mode</a>
       <a class="btn" href="https://jagritvats.github.io/eyesonly/docs/existing-repos/">Existing repos and clones</a>
       <a class="btn" href="https://jagritvats.github.io/eyesonly/docs/troubleshooting/">Troubleshooting</a>
     </div>
@@ -267,8 +320,8 @@ git pull &amp;&amp; eyesonly setup</div>
     <h2>Pricing <small style="font-size:14px;color:var(--dim);font-weight:400">(planned)</small></h2>
     <p class="sub">The core is open source, because you should be able to read the crypto you trust.</p>
     <div class="price">
-      <div class="card"><div class="k">Open source</div><div class="amt">$0</div><p>Self-host everything.</p>
-        <ul><li>Client, proxy, hook</li><li>Unlimited users and repos</li><li>MIT license</li></ul></div>
+      <div class="card"><div class="k">Open source</div><div class="amt">$0</div><p>GitHub mode, or self-host the server.</p>
+        <ul><li>Client, verify, proxy, hook</li><li>Unlimited users and repos</li><li>MIT license</li></ul></div>
       <div class="card"><div class="k">Cloud</div><div class="amt">$8<small style="font-size:14px;color:var(--dim)">/dev/mo</small></div><p>Free up to 5 developers.</p>
         <ul><li>Hosted proxy that mirrors public refs to GitHub</li><li>Policy editor and audit log</li><li>Offboarding wizard</li></ul></div>
       <div class="card"><div class="k">Enterprise</div><div class="amt">Talk to us</div><p>For regulated teams.</p>

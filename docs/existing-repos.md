@@ -4,28 +4,90 @@ For teams that already have a repo (on GitHub, GitLab or anywhere else) and peop
 already have clones of it. New to Eyes Only? Run `npx eyesonly demo` first; it shows the whole
 model in 30 seconds.
 
-Every step below assumes an Eyes Only server is running
-([server-deployment.md](server-deployment.md)) and that you have an identity and a token:
+There are two ways in, with the same commands afterwards ([choosing a mode](choosing-a-mode.md)):
+
+- **GitHub mode:** the repo stays where it is. Nothing to run. Start here.
+- **Server:** the repo moves onto an Eyes Only server (GitHub can stay as a mirror). Pushes
+  are checked before they're stored, and private branches become possible.
+
+Everyone needs an identity first:
 
 ```bash
 eyesonly keygen alice          # once per person; prints a public card
-# send the card to your admin, who runs: eyesonly-server user add <card>  (prints your token)
 ```
 
 ## Pick your scenario
 
-| You are... | Go to |
-|---|---|
-| The admin moving a repo onto Eyes Only | [Move an existing repo onto Eyes Only](#move-an-existing-repo-onto-eyes-only) |
-| Starting to commit a `.env` that's in `.gitignore` today | [Start tracking a gitignored .env](#start-tracking-a-gitignored-env) |
-| A teammate who already has a clone | [Onboard a teammate who already has a clone](#onboard-a-teammate-who-already-has-a-clone) |
-| A new teammate with no clone yet | [New teammate: clone from scratch](#new-teammate-clone-from-scratch) |
-| Rejected with `is NOT encrypted` on your first push | [History that already contains a plaintext secret](#history-that-already-contains-a-plaintext-secret) |
+| You are... | Mode | Go to |
+|---|---|---|
+| The admin adding Eyes Only to your GitHub repo | GitHub | [Add Eyes Only to your existing GitHub repo](#add-eyes-only-to-your-existing-github-repo) |
+| A teammate with a clone of that repo | GitHub | [Teammates in GitHub mode](#teammates-in-github-mode) |
+| The admin moving a repo onto the server | Server | [Move an existing repo onto the Eyes Only server](#move-an-existing-repo-onto-the-eyes-only-server) |
+| A teammate whose repo moved to the server | Server | [Onboard a teammate who already has a clone](#onboard-a-teammate-who-already-has-a-clone) |
+| Starting to commit a `.env` that's in `.gitignore` today | Both | [Start tracking a gitignored .env](#start-tracking-a-gitignored-env) |
+| A new teammate with no clone yet | Both | [New teammate: clone from scratch](#new-teammate-clone-from-scratch) |
+| Rejected with `is NOT encrypted` | Both | [History that already contains a plaintext secret](#history-that-already-contains-a-plaintext-secret) |
 
-## Move an existing repo onto Eyes Only
+## Add Eyes Only to your existing GitHub repo
 
-The server becomes `origin`. GitHub can stay as a second remote, and later as a read-only
-mirror of the public branches ([Mirroring](../README.md#mirroring-to-githubgitlab)).
+No server: the signed policy is committed in the repo. Works the same on GitLab, Gitea or a
+bare repo over SSH.
+
+**1. Check history** for secrets you're about to protect:
+
+```bash
+git log --all --oneline -- .env 'secrets/*'
+```
+
+Anything listed has been readable by everyone with repo access: rotate it, and strip it if
+you can ([history](#history-that-already-contains-a-plaintext-secret)).
+
+**2. Initialize** in your clone (you become the admin):
+
+```bash
+eyesonly init --commit        # .env and secrets/** for @core; or --files .env,config/prod.json
+git push
+```
+
+Protected files that were tracked in plaintext are encrypted in that commit. To start
+committing a `.env` you've been ignoring, see [Start tracking a gitignored .env](#start-tracking-a-gitignored-env).
+
+**3. Require the check.** Add [the verify workflow](examples/eyesonly-verify.yml) as
+`.github/workflows/eyesonly.yml`, protect `main`, and mark `eyesonly / verify` as required.
+
+**4. Add teammates** with `join` and `grant` ([next section](#teammates-in-github-mode)).
+
+Full guide: [GitHub mode](github-mode.md).
+
+## Teammates in GitHub mode
+
+A teammate with an existing clone pulls the admin's commit, then:
+
+```bash
+mv .env .env.before-eyesonly 2>/dev/null   # a local .env would block the pull once .env is tracked
+git pull
+eyesonly setup                             # mode is detected; installs filters and a pre-push hook
+eyesonly join                              # writes .eyesonly/requests/<you>.pub
+```
+
+Commit the request on a branch and open a pull request (or send the printed card to the admin).
+The admin runs `eyesonly grant <name> --from-request`, commits, runs `eyesonly rekey`,
+commits and pushes. Then:
+
+```bash
+git pull && eyesonly pull-policy
+eyesonly status                            # decrypted .env [alice, bob]
+```
+
+Until then, protected files stay `EYESONLY-V1 ...` ciphertext and everything else works as usual.
+
+## Move an existing repo onto the Eyes Only server
+
+You need a running server ([server-deployment.md](server-deployment.md)), and every member
+registered on it (`eyesonly-server user add <card>` prints their token). The server becomes
+`origin`. GitHub can stay as a second remote, and later as a read-only mirror of the public
+branches ([Mirroring](../README.md#mirroring-to-githubgitlab-server)). Already in GitHub mode?
+See [choosing a mode](choosing-a-mode.md#move-from-github-mode-to-the-server).
 
 **1. Check history for secrets you're about to protect.** The server checks every commit it
 receives, including old ones, so a plaintext `.env` anywhere in history gets the push
@@ -117,16 +179,19 @@ cat .env                             # your plaintext, unchanged
 eyesonly status                      # decrypted .env  [alice, bob]
 ```
 
-The server rejects the push if `.env` arrives in plaintext (for example from a clone where
-`eyesonly setup` was never run), so a mistake here can't leak the file.
+If `.env` would go up in plaintext (for example from a clone where `eyesonly setup` was never
+run), the pre-push hook blocks it in GitHub mode and the server rejects it in server mode. In
+GitHub mode, someone pushing without the client is caught by the required `eyesonly verify`
+check, but by then the file is readable on the host: rotate it.
 
 Keep ignoring files that should stay local, like `.env.local`. Only paths that match a
 `files` rule in the policy are encrypted. Anything else you commit is stored as normal.
 
 ## Onboard a teammate who already has a clone
 
-For someone who cloned from GitHub before the move. **The order matters:** pull first, then
-run setup.
+Server mode: for someone who cloned from GitHub before the move. (GitHub mode:
+[Teammates in GitHub mode](#teammates-in-github-mode).) **The order matters:** pull first,
+then run setup.
 
 ```bash
 git remote set-url origin https://bob:<token>@git.example.com/app.git
@@ -168,14 +233,15 @@ change you push to the protected file.
 ## New teammate: clone from scratch
 
 ```bash
-eyesonly keygen bob                  # send the printed card to your admin, get a token
-eyesonly clone https://bob:<token>@git.example.com/app.git
+eyesonly keygen bob
+eyesonly clone git@github.com:acme/app.git                # GitHub mode: any URL, then `eyesonly join`
+eyesonly clone https://bob:<token>@git.example.com/app.git   # server: send your card to the admin first, get a token
 cd app
 eyesonly status
 ```
 
-`eyesonly clone` is `git clone` plus `eyesonly setup`: it decrypts what you can read and
-leaves the rest as ciphertext. If it warns `no identity at ...`, you skipped `keygen` (or
+`eyesonly clone` is `git clone` plus `eyesonly setup`, in either mode: it decrypts what you can
+read and leaves the rest as ciphertext. If it warns `no identity at ...`, you skipped `keygen` (or
 `EYESONLY_HOME` points somewhere else); fix that and run `eyesonly setup` in the clone.
 
 Already ran plain `git clone`? Run `eyesonly setup` inside it. That's the same thing.
@@ -187,6 +253,10 @@ If a secret was ever committed in plaintext, the server refuses to store that hi
 ```
 remote: [eyesonly] REJECTED: '.env' in a84fc929 is NOT encrypted. Refusing to store a plaintext secret. Run `eyesonly setup` and recommit.
 ```
+
+In GitHub mode nothing is rejected (that history is already on the host), but the old
+versions stay readable by everyone with repo access, and `eyesonly verify` prints the same
+message for any new plaintext commit.
 
 That secret has been readable by everyone with access to the old repo. Encrypting it now
 doesn't change that, so:
@@ -208,7 +278,7 @@ doesn't change that, so:
 
 ## Keep the token out of the remote URL
 
-A token in the URL ends up in `.git/config` and in `git remote -v`. With a credential helper
+Server mode only; in GitHub mode you use your host's normal credentials. A token in the URL ends up in `.git/config` and in `git remote -v`. With a credential helper
 (Git Credential Manager on Windows, osxkeychain on macOS, libsecret or `store` on Linux)
 the URL holds only your user name.
 
@@ -224,6 +294,7 @@ eyesonly pull-policy     # the client asks the same helper
 
 ## Next
 
+- [github-mode.md](github-mode.md): everything about GitHub mode
 - [team-workflows.md](team-workflows.md): giving and removing access, private branches, offboarding
-- [ci.md](ci.md): reading protected files in CI
+- [ci.md](ci.md): `eyesonly verify` as a required check, reading protected files in CI
 - [troubleshooting.md](troubleshooting.md): error messages and fixes

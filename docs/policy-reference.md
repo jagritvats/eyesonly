@@ -2,6 +2,9 @@
 
 For repo admins writing `eyesonly.json`: every field, how matching works, and how to sign a policy.
 
+This page covers the server's policy. In [GitHub mode](github-mode.md) the policy lives in the
+repo instead; see [GitHub mode policy](#github-mode-policy) at the end.
+
 Each repo has one policy, stored on the server at `repos/<name>.git/eyesonly.json`. You
 manage it with:
 
@@ -258,3 +261,21 @@ On the server (`policy attest`):
 | `version must increase (installed: N, signed: M)` | re-run `policy manifest` and sign the new output |
 
 On clients, see [troubleshooting.md](troubleshooting.md#signed-policy-and-pinning).
+
+## GitHub mode policy
+
+In GitHub mode the policy is committed as `.eyesonly/policy.json`: a manifest signed by an
+admin, holding
+
+- `policy`: the rules as written, with the same meaning as above: `members`, `admins`,
+  `groups` and `files` (`writers`, `protect` and `branches` don't exist here; use your host's
+  branch protection);
+- `files`: each glob expanded to its readers, in rule order (first match wins);
+- `keys`: every member's public keys;
+- `repo` (a random id made by `init`) and `version`, which only goes up.
+
+Don't edit it by hand: the signature would no longer match and every client would refuse it.
+Change it with `eyesonly grant` / `eyesonly revoke` (which re-sign and bump the version), and
+read it with `eyesonly policy show`. Clients read it only from the default branch, so a policy
+edited on a feature branch takes effect once it's merged. Pinning works as above:
+`.git/eyesonly/trust.json`, `EYESONLY_PIN_ADMIN`.

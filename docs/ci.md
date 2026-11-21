@@ -1,11 +1,101 @@
 # CI
 
-For anyone wiring CI to an Eyes Only repo: how a build gets read access to protected files, and nothing more.
+For anyone wiring CI to an Eyes Only repo: checking every commit, and giving a build read
+access to the protected files it needs, and nothing more.
+
+| Job | GitHub mode | Server |
+|---|---|---|
+| Block plaintext and forged secrets from merging | [`eyesonly verify` as a required check](#github-mode-eyesonly-verify-as-a-required-check) (no secrets) | the server already rejects them on push |
+| Read secrets in a build | [checkout + identity + `eyesonly setup`](#github-mode-read-secrets-in-ci) | [the action's clone mode](#4-clone-in-the-job) |
+
+## GitHub mode: `eyesonly verify` as a required check
+
+Add [examples/eyesonly-verify.yml](examples/eyesonly-verify.yml) as
+`.github/workflows/eyesonly.yml`:
+
+```yaml
+name: eyesonly
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0             # verify needs the base commit of the push or pull request
+      - uses: jagritvats/eyesonly@v0.4
+        with:
+          mode: verify
+```
+
+Then protect `main` and mark `eyesonly / verify` as a required status check (Settings →
+Rules, or Branch protection). Pull requests that add a plaintext secret, a forged or moved
+envelope, a policy change not signed by an admin, or a `.gitattributes` line that routes a
+protected path away from the filter can't be merged.
+
+It needs no secrets: it reads the checkout and the signed policy on the default branch. It
+fails on a shallow checkout (`the checkout is shallow; use actions/checkout with
+fetch-depth: 0`). Input `range` overrides the default (the pull request's base..head, or the
+push's before..after). On GitLab or other CI, run the same check by hand:
+
+```bash
+npx -y eyesonly verify --range "$BASE_SHA..$HEAD_SHA"
+```
+
+This catches a bad commit before it merges; it can't un-publish a plaintext file someone
+pushed to a branch. Rotate anything that `verify` reports as plaintext.
+
+## GitHub mode: read secrets in CI
+
+CI gets its own identity and is granted only the files it needs:
+
+```bash
+EYESONLY_HOME=./ci-identity eyesonly keygen ci-bot     # on a trusted machine; prints the card
+eyesonly grant ci-bot --card eyesonlypub1:... --files .env.ci        # admin, in the repo
+git add .eyesonly .gitattributes && git commit -m "eyesonly: ci-bot reads .env.ci"
+eyesonly rekey && git commit -am "rekey for ci-bot" && git push
+```
+
+Store `ci-identity/identity.json` (raw or base64) as the secret `EYESONLY_IDENTITY`, delete
+the directory, and store the admin fingerprint from `eyesonly policy show` as the variable
+`EYESONLY_PIN_ADMIN`. Then:
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read                 # the job can't push, even though ci-bot's key could sign .env.ci
+    env:
+      EYESONLY_IDENTITY: ${{ secrets.EYESONLY_IDENTITY }}
+      EYESONLY_PIN_ADMIN: ${{ vars.EYESONLY_PIN_ADMIN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0             # setup reads the policy from origin's default branch
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm i -g eyesonly
+      - run: eyesonly setup && ! head -c 11 .env.ci | grep -q EYESONLY-V1   # fail if it stayed encrypted
+      - run: eyesonly run --file .env.ci -- npm test
+```
+
+`eyesonly setup` in a plain checkout decrypts what `ci-bot` can read. In GitHub mode the
+grant is the whole authorization: any member in a file's audience can also sign a new version
+of it, so keep CI tokens read-only.
+
+## Server mode
 
 CI is just another user with its own key. Give it read access to the files it needs, keep
 it out of `writers`, and store its key and token as CI secrets.
 
-## 1. Create a CI identity
+### 1. Create a CI identity
 
 On a trusted machine, in a throwaway directory:
 
@@ -19,7 +109,7 @@ EYESONLY_HOME=./ci-identity eyesonly keygen ci-bot
 same variable tells every later `eyesonly` command, and every git filter it installs,
 where to find the key.
 
-## 2. Register it and grant read access
+### 2. Register it and grant read access
 
 On the server:
 
@@ -49,7 +139,7 @@ Then:
 Read access to a protected file normally includes write access. Leaving `ci-bot` out of
 `writers` is what keeps it read-only: its pushes get `[eyesonly] read-only access`.
 
-## 3. Store two secrets
+### 3. Store two secrets
 
 | Secret | Value |
 |---|---|
@@ -62,9 +152,9 @@ If the policy is signed, also store the admin's policy fingerprint as a non-secr
 `EYESONLY_PIN_ADMIN`. Every CI run clones fresh, so without a pin each run trusts whichever
 admin signature the server presents (trust on first use).
 
-## 4. Clone in the job
+### 4. Clone in the job
 
-### GitHub Actions: the eyesonly action
+#### GitHub Actions: the eyesonly action
 
 ```yaml
 name: build
@@ -75,7 +165,7 @@ jobs:
     env:
       EYESONLY_PIN_ADMIN: ${{ vars.EYESONLY_PIN_ADMIN }}   # omit if the policy isn't signed
     steps:
-      - uses: jagritvats/eyesonly@v0.3
+      - uses: jagritvats/eyesonly@v0.4
         with:
           url: https://git.example.com/app.git
           user: ci-bot
@@ -107,7 +197,7 @@ Later steps can run `git pull`, `git fetch` and `eyesonly run` without extra set
 On a self-hosted runner, `$RUNNER_TEMP` is cleaned between jobs by the runner; the git
 configuration lives only in the job's environment.
 
-### Without the action
+#### Without the action
 
 The client reads `EYESONLY_IDENTITY` straight from the environment, so a job-level `env`
 is enough. Give git the token through a credential helper:
@@ -143,7 +233,7 @@ Notes:
 - A clone without an identity, or with the wrong key, still succeeds (with a warning). The
   files just stay ciphertext, hence the check above.
 
-## Use the secrets in a job
+## Use the secrets in a job (both modes)
 
 `eyesonly run` loads protected dotenv files into a command's environment, decrypted from the
 committed blobs, so nothing extra is written to disk:
@@ -166,7 +256,7 @@ The steps are the same anywhere:
 3. Make the token available to git's credential helper, or embed it in the URL.
 4. Run `eyesonly clone`, with `EYESONLY_PIN_ADMIN` set if the policy is signed.
 
-## CI on a GitHub/GitLab mirror
+## CI on a GitHub/GitLab mirror (server)
 
 With `eyesonly-server mirror`, GitHub or GitLab gets your public branches, so its CI runs on
 them. Here's what that CI can and can't do:

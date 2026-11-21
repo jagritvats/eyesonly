@@ -7,8 +7,10 @@ the token comes from, the filters and hook, the pinned attributes and whether th
 policy matches the server, and prints a fix for each problem.
 
 Client messages start with `[eyesonly]`. Server-side rejections show up in `git push`
-output as `remote: [eyesonly] REJECTED: ...`. Admin CLI errors start with
-`[eyesonly-server]`.
+output as `remote: [eyesonly] REJECTED: ...`; in GitHub mode `eyesonly verify` (pre-push
+hook and CI) prints the same `REJECTED: ...` lines. Admin CLI errors start with
+`[eyesonly-server]`. Errors specific to the policy in the repo are under
+[GitHub mode](#github-mode).
 
 ## Cloning and setup
 
@@ -26,8 +28,9 @@ environment.
 
 ### `eyesonly needs an http(s) remote, got: <url>`
 
-**Cause:** the remote eyesonly uses (`origin`, or the one chosen with `--remote`) is a local
-path or an SSH URL, for example a GitHub remote. The server only speaks HTTP(S).
+**Cause:** server mode only (GitHub mode works with any URL). The remote eyesonly uses
+(`origin`, or the one chosen with `--remote`) is a local path or an SSH URL, for example a
+GitHub remote. The server only speaks HTTP(S).
 **Fix:** if the Eyes Only server is another remote, `eyesonly setup --remote <name>`.
 Otherwise `git remote set-url origin https://<you>@git.example.com/app.git`, then
 `eyesonly setup`.
@@ -289,6 +292,92 @@ trusted commit.
 **Cause:** you're not a reader, or the file hasn't been rekeyed since you were added.
 **Fix:** `eyesonly status` shows the audience and whether it `needs rekey`. Ask a reader to
 run `eyesonly pull-policy && eyesonly rekey` and push.
+
+## GitHub mode
+
+### `no Eyes Only policy found: remote 'origin' is not an Eyes Only server and the default branch has no .eyesonly/policy.json`
+
+**Cause:** nobody has run `eyesonly init` on this repo yet, or its commit isn't on the
+default branch (or isn't fetched).
+**Fix:** `git pull`, or ask an admin to run `eyesonly init --commit` and push. If the policy
+lives on another remote, use `--remote <name>`.
+
+### `` you ('bob') aren't in this repo's policy yet: run `eyesonly join` and ask an admin to grant you ``
+
+**Cause:** you can clone and work, but no protected file is encrypted for you.
+**Fix:** `eyesonly join`, commit `.eyesonly/requests/bob.pub` in a pull request (or send the
+card). After the admin's `grant` and `rekey` are pushed: `git pull && eyesonly pull-policy`.
+
+### `warning: the policy has a different key for 'bob' than your identity; ask an admin to re-grant you`
+
+**Cause:** you made a new key (`keygen` on a new machine) and the policy still has the old one.
+**Fix:** send your new card; the admin runs `eyesonly grant bob --card <card>`, commits and
+rekeys. Or copy your old `identity.json` to this machine.
+
+### `only admins can change the policy ('bob' isn't one; admins: alice)`
+
+**Cause:** `grant` / `revoke` re-sign the policy, which needs an admin's key.
+**Fix:** ask an admin, or have one run `eyesonly grant bob --admin`.
+
+### `.eyesonly/policy.json already exists. Use eyesonly setup, or eyesonly grant / revoke to change it.`
+
+**Cause:** `eyesonly init` on a repo that is already set up.
+**Fix:** `eyesonly setup` to use it; `grant` / `revoke` to change it.
+
+### `origin (...) is an Eyes Only server: the server holds the policy.`
+
+**Cause:** `eyesonly init` in a clone of a server repo. Server repos don't use a policy file.
+**Fix:** the server admin runs `eyesonly-server init` / `policy set`; you run `eyesonly setup`.
+
+### `this clone was set up in repo mode, but it now looks like server mode. Not switching silently`
+
+**Cause:** the remote changed kind (for example the repo moved onto a server), or the
+default branch gained a policy file in a server-mode clone.
+**Fix:** if that's intended, `eyesonly setup --mode server` (or `--mode repo`). Moving to a
+server also needs `rm .git/eyesonly/trust.json` first; see
+[choosing a mode](choosing-a-mode.md#move-from-github-mode-to-the-server).
+
+### `refusing the repo's policy: <reason>. Nothing was changed.`
+
+| Reason | Cause | Fix |
+|---|---|---|
+| `policy signature invalid` | the file was edited by hand, or tampered with | restore it from the default branch; admins change it with `grant` / `revoke` |
+| `policy is malformed or inconsistent (was it edited by hand? ...)` | hand edit or a bad merge of `.eyesonly/policy.json` | take the version from the default branch, redo the change with `grant` / `revoke` |
+| `not signed by a pinned admin ('mallory' isn't one)` | someone who isn't a pinned admin signed it | don't override; ask your admin. If the admin set really changed, check out of band, then delete `.git/eyesonly/trust.json` |
+| `policy version N is older than the last one seen here (M)` | a rollback | someone reverted the policy; ask the admin to re-sign a newer version |
+| `policy belongs to a different repo (id ..., pinned ...)` | the policy file was copied from another repo | restore this repo's policy |
+| `admin key ... does not match EYESONLY_PIN_ADMIN (...)` | your pin is wrong, or the admin key changed | check the fingerprint with `eyesonly policy show` and your admin |
+| `this clone was set up against an Eyes Only server, not a policy in the repo` | a server clone now sees a policy file | see the mode-switch entry above |
+
+### `REJECTED: ...` from `eyesonly verify` or `push blocked: fix the commits above (CI runs the same check). To push anyway: git push --no-verify`
+
+**Cause:** the pre-push hook or CI ran `eyesonly verify`, which prints the same `REJECTED`
+messages as the server (see [Pushing](#pushing)). Fix the commit (`eyesonly setup`, then
+amend or recommit the file) rather than pushing with `--no-verify`: CI will fail the same
+way, and in GitHub mode a plaintext push is readable on the host right away.
+
+### `commit <sha> deletes .eyesonly/policy.json, which would turn off enforcement.`
+
+**Cause:** a commit removes the policy file.
+**Fix:** restore it. Admins change the policy with `grant` / `revoke`; moving to a server is
+described in [choosing a mode](choosing-a-mode.md#move-from-github-mode-to-the-server).
+
+### `.eyesonly/policy.json in <sha>: policy change signed by 'bob', who was not an admin before it`
+
+**Cause:** a policy edit in the range wasn't signed by an admin of the previous policy. Same
+for `policy version N doesn't increase (was M)`.
+**Fix:** drop that commit; an admin makes the change with `grant` / `revoke`.
+
+### `base commit '<sha>' isn't in this clone. Fetch full history` / `the checkout is shallow`
+
+**Cause:** `verify` needs the base of the range. CI checkouts are shallow by default.
+**Fix:** `actions/checkout` with `fetch-depth: 0`, or `git fetch --unshallow`.
+
+### `note: '.env' deleted in <sha> (who did it can't be checked without a server)`
+
+**Cause:** GitHub mode can't tell who made a commit, so deletions of protected files are
+reported, not refused.
+**Fix:** review it like any other change in the pull request.
 
 ## Signed policy and pinning
 

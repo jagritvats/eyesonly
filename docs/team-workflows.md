@@ -2,12 +2,40 @@
 
 For admins and developers on a team that already runs Eyes Only: day-to-day access changes, private branches and offboarding.
 
-Server commands run where the server's data dir is (see
-[server-deployment.md](server-deployment.md)). Policy fields are described in
-[policy-reference.md](policy-reference.md). To bring an existing repo or clone onto Eyes
-Only, see [existing-repos.md](existing-repos.md).
+The first section is for [GitHub mode](github-mode.md) (no server). The rest is for the
+server, except where a section says it applies to both. Server commands run where the
+server's data dir is (see [server-deployment.md](server-deployment.md)). Policy fields are
+described in [policy-reference.md](policy-reference.md). To bring an existing repo or clone
+onto Eyes Only, see [existing-repos.md](existing-repos.md).
 
-## Add a teammate
+## GitHub mode: add, change and remove access
+
+Admins change the signed policy on their own laptop; every change is a commit.
+
+| Task | Commands (admin, in the repo) |
+|---|---|
+| Add a teammate | they run `eyesonly join` and open a PR with `.eyesonly/requests/<name>.pub`; you merge it, then `eyesonly grant <name> --from-request` |
+| Add someone by card | `eyesonly grant <name> --card eyesonlypub1:...` |
+| Put someone in a group | `eyesonly grant <name> --group <g>` |
+| Give someone one path | `eyesonly grant <name> --files .env.production` (also adds a `.gitattributes` line) |
+| Make someone an admin | `eyesonly grant <name> --admin` |
+| Remove someone from a group | `eyesonly revoke <name> --group <g>` |
+| Remove someone entirely | `eyesonly revoke <name>`, then rotate what `eyesonly audit <name>` lists |
+| New key for someone (lost key, new machine) | `eyesonly grant <name> --card <new card>` (prints `replacing <name>'s key ... readers must rekey`) |
+| See who can read what | `eyesonly policy show` |
+
+After any of these:
+
+```bash
+git add .eyesonly .gitattributes && git commit -m "eyesonly: <what changed>"
+eyesonly rekey && git commit -am "rekey" && git push      # re-encrypt for the new audience
+```
+
+Teammates pick it up with `git pull && eyesonly pull-policy`. The policy takes effect once
+it's on the default branch: a grant sitting in an unmerged branch changes nothing.
+`rekey`, rotation and offboarding work as in the sections below.
+
+## Add a teammate (server)
 
 1. The teammate creates a key on their machine and sends you the card it prints:
 
@@ -73,7 +101,7 @@ repo app.git as alice
   decrypted config/app.key  [alice, bob]  needs rekey (encrypted for alice; policy says alice,bob)
 ```
 
-## Read-only members
+## Read-only members (server)
 
 Put the people who may push in `writers`. Every other member can clone and fetch, but can't
 push:
@@ -87,7 +115,8 @@ contractors who send patches, and CI users ([ci.md](ci.md)).
 
 ## Private branches
 
-Give a namespace an audience:
+Server only. GitHub mode doesn't have private branches yet: anyone with repo access sees
+every branch. Give a namespace an audience:
 
 ```json
 "branches": { "refs/heads/private/": ["@core"] }
@@ -140,7 +169,7 @@ branch. Pointing a ref at those commits gets
 Remove or widen the rule and `policy set`. Everything already on that branch, history
 included, becomes visible to the new audience.
 
-## Protect main
+## Protect main (server)
 
 By default (no `protect` section), non-admins can't force-push or delete tags or the
 branch `HEAD` points to. To also limit who can push to `main`:
@@ -160,7 +189,9 @@ force-pushing `main` back to a commit from before a rekey, which fails with
 ## Separate secrets per environment
 
 Give each environment its own file and its own audience. Developers get development values,
-only the deploy pipeline and a couple of people get production:
+only the deploy pipeline and a couple of people get production. (GitHub mode: `eyesonly grant
+<name> --files .env.production` per person; see [github-mode.md](github-mode.md#separate-secrets-per-environment).)
+On the server:
 
 ```json
 {
@@ -195,13 +226,18 @@ With no `--file`, `eyesonly run` loads every `.env` and `.env.*` you can read (i
 order, later files winning) and skips the rest with a note. An explicit `--file` you can't
 read is an error, and the command doesn't run. For CI users, see [ci.md](ci.md).
 
-## Rotate a secret
+## Rotate a secret (both modes)
 
 1. Get a new value from the provider (Stripe, AWS, ...).
 2. Edit the file, commit and push. The new ciphertext is sealed for the current policy.
 3. Revoke the old value at the provider. The old ciphertext is still in history.
 
 ## Offboard someone
+
+**GitHub mode:** `eyesonly revoke bob`, commit, then steps 3 to 5 below. Also remove bob from
+the repo on your host; Eyes Only can't stop him reading what's still on it.
+
+**Server:**
 
 1. Remove their access on the server:
 
@@ -227,12 +263,12 @@ eyesonly audit bob
 
 `audit` also counts versions that were committed in plaintext.
 
-4. Rotate every secret it lists ([Rotate a secret](#rotate-a-secret)).
+4. Rotate every secret it lists ([Rotate a secret](#rotate-a-secret-both-modes)).
 5. Rekey so current ciphertext no longer names them (`eyesonly pull-policy && eyesonly rekey`),
    commit and push. Rotation in step 4 already does this for the files you edit.
 6. If the policy is signed and they were in a file audience, re-sign it.
 
-## Rotate a user's token
+## Rotate a user's token (server)
 
 For a lost or leaked token. Their key stays the same:
 
@@ -272,6 +308,9 @@ token, group memberships and policy entries stay as they are.
    ```
 
    It prints the old and new fingerprints and, per repo, what has to happen next.
+
+   In GitHub mode the admin runs `eyesonly grant bob --card eyesonlypub1:...` in the repo
+   instead, commits `.eyesonly`, and skips step 3 (the grant is the signed change).
 
 3. **Signed policy:** if the repo uses one, re-sign it. Clients keep the old keys until you
    do (`policy manifest` -> `eyesonly policy-sign` -> `policy attest`, see

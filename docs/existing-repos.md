@@ -68,8 +68,16 @@ git push -u origin --all
 git push origin --tags
 ```
 
-`eyesonly setup` and `eyesonly pull-policy` always read the policy from the `origin`
-remote, so the Eyes Only server has to be `origin`. To keep the token out of
+Rather keep GitHub as `origin`? Add the Eyes Only server under another name and tell
+eyesonly once; it remembers the choice (`git config eyesonly.remote`):
+
+```bash
+git remote add eyes https://alice:<token>@git.example.com/app.git
+git push -u eyes --all && git push eyes --tags
+eyesonly setup --remote eyes
+```
+
+Then push to `eyes` for anything protected or private. To keep the token out of
 `.git/config`, see [Keep the token out of the remote URL](#keep-the-token-out-of-the-remote-url).
 
 **5. Turn on encryption in your clone and commit the attributes:**
@@ -132,6 +140,17 @@ Then check:
 ```bash
 eyesonly status          # decrypted .env [alice, bob]  (or "locked" if you're not a reader)
 git status               # clean
+eyesonly doctor          # identity, remote, filters, hook, policy freshness: says how to fix anything off
+```
+
+Keeping GitHub as `origin`: add the server as another remote instead, pull from it, and
+point eyesonly at it:
+
+```bash
+git remote add eyes https://bob:<token>@git.example.com/app.git
+mv .env .env.before-eyesonly 2>/dev/null
+git pull eyes main
+eyesonly setup --remote eyes
 ```
 
 Why this order:
@@ -191,7 +210,11 @@ doesn't change that, so:
 
 A token in the URL ends up in `.git/config` and in `git remote -v`. With a credential helper
 (Git Credential Manager on Windows, osxkeychain on macOS, libsecret or `store` on Linux)
-the URL holds only your user name:
+the URL holds only your user name.
+
+`eyesonly clone https://you:<token>@...` does this for you when a helper is configured: the
+token goes to the helper and the stored URL keeps only your user name (without a helper it
+says so and keeps the token in the URL). For an existing clone:
 
 ```bash
 git remote set-url origin https://bob@git.example.com/app.git

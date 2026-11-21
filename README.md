@@ -36,7 +36,7 @@ junior can't list, fetch (even by SHA over protocol v2) or push to `private/*`; 
 plaintext push is rejected by the server; and alice's accidental merge of private history
 into `main` is rejected while a squash merge goes through.
 
-Proof beyond the demo: `npm test` runs 438 adversarial end-to-end checks (9 suites) against
+Proof beyond the demo: `npm test` runs 450 adversarial end-to-end checks (9 suites) against
 a real server, with an attacker who controls their own git client.
 
 ## Install

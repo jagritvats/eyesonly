@@ -5,6 +5,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/test/lib/compat.sh"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
@@ -87,8 +88,8 @@ echo "== happy path"
 expect_ok "mirror set (local upstream, main only)" mirror set app.git --url "$UP" --allow-local --push refs/heads/main
 expect_ok "mirror push" mirror push app.git
 [[ "$(up_oid refs/heads/main)" == "$(git -C "$R" rev-parse main)" ]] && ok "upstream main has Eyes Only's main oid" || bad "upstream main oid differs"
-[[ "$(stat -c %a "$R/eyesonly-mirror.json")" == 600 ]] && ok "eyesonly-mirror.json is mode 600" || bad "eyesonly-mirror.json mode $(stat -c %a "$R/eyesonly-mirror.json")"
-[[ "$(stat -c %a "$R/eyesonly-mirror.log")" == 600 ]] && ok "eyesonly-mirror.log is mode 600" || bad "eyesonly-mirror.log mode"
+check_mode "eyesonly-mirror.json is mode 600" 600 "$R/eyesonly-mirror.json"
+check_mode "eyesonly-mirror.log is mode 600" 600 "$R/eyesonly-mirror.log"
 expect_out "a second push is a no-op" "up to date" mirror push app.git
 as alice git tag -a v1.0 -m "v1.0" main && as alice git push -q origin v1.0 2>/dev/null
 mirror set app.git --url "$UP" --allow-local --push refs/heads/main 'refs/tags/v*' 2>/dev/null
@@ -162,6 +163,8 @@ expect_reject "ext:: url is refused" "transport not allowed: ext" mirror set app
 expect_reject "fd:: url is refused" "transport not allowed: fd" mirror set app.git --url "fd::3" --push refs/heads/main
 expect_reject "file:// url without --allow-local is refused" "only allowed with --allow-local" mirror set app.git --url "file://$UP" --push refs/heads/main
 expect_reject "path url without --allow-local is refused" "only allowed with --allow-local" mirror set app.git --url "$UP" --push refs/heads/main
+expect_reject "a Windows drive path is a local url, not host:path" "only allowed with --allow-local" mirror set app.git --url "C:/repos/up.git" --push refs/heads/main
+expect_reject "a backslash path is a local url" "only allowed with --allow-local" mirror set app.git --url 'C:\repos\up.git' --push refs/heads/main
 expect_reject "http:// url is refused" "must use https" mirror set app.git --url "http://example.com/a.git" --push refs/heads/main
 expect_reject "credentials in the url are refused" "must not embed credentials" mirror set app.git --url "https://x:tok@example.com/a.git" --push refs/heads/main
 expect_reject "--push 'refs/*' is too broad" "push allowlist too broad" mirror set app.git --url "$UP" --allow-local --push 'refs/*'
@@ -190,7 +193,8 @@ expect_reject "even --allow-force won't clobber an upstream change made since th
 echo "== credential handling"
 printf 'secret-token-xyz\n' > "$SB/cred" && chmod 600 "$SB/cred"
 cp "$SB/cred" "$SB/cred644" && chmod 644 "$SB/cred644"
-expect_reject "credential file with mode 0644 is refused" "must have mode 0600" mirror set app.git --url "$SB/nope.git" --allow-local --push refs/heads/main --credential-file "$SB/cred644"
+if [[ -n "$IS_WINDOWS" ]]; then ok "credential file with mode 0644 is refused (skipped: no POSIX modes on Windows)"
+else expect_reject "credential file with mode 0644 is refused" "must have mode 0600" mirror set app.git --url "$SB/nope.git" --allow-local --push refs/heads/main --credential-file "$SB/cred644"; fi
 cp "$SB/cred" "$R/cred" && chmod 600 "$R/cred"
 expect_reject "credential file inside the repo dir is refused" "outside the repo directory" mirror set app.git --url "$SB/nope.git" --allow-local --push refs/heads/main --credential-file "$R/cred"
 rm -f "$R/cred"
@@ -198,12 +202,18 @@ expect_ok "mirror set with a 0600 credential file" mirror set app.git --url "$SB
 REALGIT=$(command -v git)
 mkdir -p "$SB/shim"
 printf '#!/bin/sh\necho "$@" >> "%s"\nexec "%s" "$@"\n' "$SB/argv.log" "$REALGIT" > "$SB/shim/git" && chmod +x "$SB/shim/git"
-expect_reject "push to a failing upstream fails" "upstream push failed" env PATH="$SB/shim:$PATH" $VS mirror push app.git
-grep -q -- "push" "$SB/argv.log" && ok "the git shim saw the push argv" || bad "shim saw no push"
-! grep -q secret-token-xyz "$SB/argv.log" && ok "token never appears in git argv" || bad "token in argv"
+if [[ -n "$IS_WINDOWS" ]]; then
+  # Node can't spawn an extensionless shell script as `git` on Windows, so the argv shim is POSIX-only.
+  expect_reject "push to a failing upstream fails" "upstream push failed" $VS mirror push app.git
+  ok "the git shim saw the push argv (skipped on Windows)"; ok "token never appears in git argv (skipped on Windows)"
+else
+  expect_reject "push to a failing upstream fails" "upstream push failed" env PATH="$SB/shim:$PATH" $VS mirror push app.git
+  grep -q -- "push" "$SB/argv.log" && ok "the git shim saw the push argv" || bad "shim saw no push"
+  [[ -f "$SB/argv.log" ]] && ! grep -q secret-token-xyz "$SB/argv.log" && ok "token never appears in git argv" || bad "token in argv (or no argv log)"
+fi
 ! grep -q secret-token-xyz "$SB/out" && ok "token never appears in command output" || bad "token in output"
 ! grep -q secret-token-xyz "$R/eyesonly-mirror.json" && ok "token not stored in eyesonly-mirror.json" || bad "token in config"
-expect_out "mirror show prints the credential path" "$SB/cred" mirror show app.git
+expect_out "mirror show prints the credential path" "$(native_path "$SB/cred")" mirror show app.git
 expect_fail "mirror show never prints the credential contents" bash -c "$VS mirror show app.git 2>&1 | grep -q secret-token-xyz"
 
 echo "== mirror state is never served over HTTP"

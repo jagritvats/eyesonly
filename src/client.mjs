@@ -5,7 +5,7 @@ import * as attest from './attest.mjs';
 import * as attrs from './attrs.mjs';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
-import { fileRule } from './policy.mjs';
+import { fileRule, writersOf } from './policy.mjs';
 import { installPreCommitHook, cmdPreCommit, HOOK_MARK } from './hooks.mjs';
 import { eyesonlyHome, identityPath, identitySource, readIdentity } from './identity.mjs';
 
@@ -111,7 +111,8 @@ function cmdKeygen([name]) {
 function cmdWhoami() {
   const id = loadIdentity();
   const card = vc.publicCard(id);
-  console.log(`${id.name}  ${vc.fingerprint(card)}`);
+  console.log(`${id.name}  ${vc.fingerprint(card)}  (key fingerprint: user list, policy show members)`);
+  console.log(`admin pin  ${attest.adminFingerprint(card.ed25519)}  (what members compare, or set as EYESONLY_PIN_ADMIN, if you sign policies)`);
   console.log(vc.encodeCard(card));
 }
 
@@ -458,6 +459,61 @@ function storeToken(url) {
   return plain;
 }
 
+/**
+ * GitHub mode -> server, run by an admin after `eyesonly-server import` and a policy
+ * signature by an admin members already pinned. Pushes every branch (also those only on the
+ * old host), tag and refs/eyesonly/*, then switches this clone to server mode. The pinned
+ * admin keys carry over, so nobody deletes trust.json.
+ */
+async function cmdMigrate(args) {
+  const { flags } = takeFlags(args, ['to', 'remote']);
+  const url = flags.to;
+  if (!url) die('usage: eyesonly migrate --to https://<you>:<token>@<host>/<repo>.git [--remote eyesonly]');
+  const top = repoTop();
+  let mode = null;
+  try {
+    mode = gitStr(['config', '--local', 'eyesonly.mode'], { cwd: top });
+  } catch {}
+  if (mode !== 'repo') die(`migrate moves a GitHub-mode repo onto a server, but this clone is ${mode ? `in ${mode} mode` : 'not set up (eyesonly setup)'}`);
+  const name = flags.remote || 'eyesonly';
+  const rm = await repoMode();
+  if (!(await rm.probeServer(url))) die(`${redact(url)} is not an Eyes Only server (or it's unreachable). Create the repo there first: eyesonly-server import <repo.git> --policy ${'.eyesonly/policy.json'}`);
+  let old = 'origin';
+  try {
+    old = gitStr(['config', 'eyesonly.remote'], { cwd: top }) || 'origin';
+  } catch {}
+  if (old === name) die(`the remote '${name}' is already this clone's eyesonly remote; pass --remote <another-name>`);
+  // Check the server's policy BEFORE pushing anything: signed by an admin this clone pinned.
+  await loadResolved(url, gitDir(), name);
+  let existing = null;
+  try {
+    existing = gitStr(['config', `remote.${name}.url`], { cwd: top });
+  } catch {}
+  if (existing) {
+    const strip = (u) => u.replace(/\/\/[^@/]*@/, '//');
+    if (strip(existing) !== strip(url)) die(`a remote named '${name}' already points at ${redact(existing)}; pass --remote <another-name>`);
+  } else git(['remote', 'add', name, storeToken(url)], { cwd: top });
+  if (tryGit(['config', `remote.${old}.url`])) spawnSync('git', ['fetch', '--quiet', old], { cwd: top, stdio: ['ignore', 'ignore', 'inherit'] });
+  const list = (prefix) => (tryGit(['for-each-ref', '--format=%(refname)', prefix]) || '').toString().split('\n').map((s) => s.trim()).filter(Boolean);
+  const heads = new Set(list('refs/heads/').map((r) => r.slice('refs/heads/'.length)));
+  const specs = ['refs/heads/*:refs/heads/*', 'refs/tags/*:refs/tags/*'];
+  if (list('refs/eyesonly/').length) specs.push('refs/eyesonly/*:refs/eyesonly/*');
+  for (const r of list(`refs/remotes/${old}/`)) {
+    const b = r.slice(`refs/remotes/${old}/`.length);
+    if (b !== 'HEAD' && !heads.has(b)) specs.push(`${r}:refs/heads/${b}`);
+  }
+  log(`pushing ${heads.size} local branch(es), ${specs.length - 2 - (specs.includes('refs/eyesonly/*:refs/eyesonly/*') ? 1 : 0)} branch(es) only on '${old}', tags${specs.includes('refs/eyesonly/*:refs/eyesonly/*') ? ' and refs/eyesonly/*' : ''} to '${name}'...`);
+  const r = spawnSync('git', ['push', '--no-verify', name, ...specs], { cwd: top, stdio: ['ignore', 'inherit', 'inherit'] });
+  if (r.status !== 0) die(`the server refused part of the push (see above). Nothing was switched; fix it and run eyesonly migrate again. History with plaintext secrets: docs/existing-repos.md`);
+  await cmdSetup(['--remote', name, '--mode', 'server']);
+  const bare = redact(url).replace(/\/\/[^@/]*@/, '//');
+  log(`migrated: this clone now uses the server ('${name}'). The pinned admin keys carried over.`);
+  log('teammates, in their clones (each with their own token):');
+  log(`  git remote add ${name} ${bare.replace('//', '//<name>:<token>@')}`);
+  log(`  git fetch ${name} && eyesonly setup --remote ${name} --mode server`);
+  log(`then make the old host read-only or mirror to it (eyesonly-server mirror), so nobody keeps pushing there.`);
+}
+
 async function cmdClone([url, dir]) {
   if (!url) die('usage: eyesonly clone <url> [dir]');
   // No Eyes Only server behind the URL: a plain git host with the policy in the repo.
@@ -530,27 +586,35 @@ export async function cleanBuf(input, file, lookup = catBlobs) {
   if (!allowed) die(`'${file}' has filter=eyesonly in .gitattributes but no rule in the policy. Refusing to commit it in plaintext.`);
   const id = loadIdentity();
   if (!allowed.includes(id.name)) die(`'${id.name}' is not allowed to write '${file}' (allowed: ${allowed.join(', ')})`);
+  const writers = writersOf(policy, file);
+  const canWrite = writers.includes(id.name);
 
   const recipients = recipientsFor(policy, allowed);
   const missing = allowed.filter((u) => !recipients[u]);
-  if (missing.length) log(`warning: no public key for ${missing.join(', ')}; they won't be able to read '${file}'`);
+  if (canWrite && missing.length) log(`warning: no public key for ${missing.join(', ')}; they won't be able to read '${file}'`);
 
   // Don't produce a fresh ciphertext (and a noisy diff) when the plaintext hasn't changed.
+  // A read-only reader's unchanged checkout maps back to the writer's envelope as it is (git
+  // re-cleans files whenever their stat looks racy); only a real edit is refused.
   for (const blob of await lookup([`:${file}`, `HEAD:${file}`])) {
     if (!blob || !vc.isEnvelope(blob)) continue;
     try {
       const env = vc.parse(blob);
-      if (env.path !== file || !sameSet(Object.keys(env.keys), Object.keys(recipients))) continue;
+      if (env.path !== file) continue;
+      const signer = policy.keys?.[env.signer];
+      if (!signer || !writers.includes(env.signer) || !vc.verify(env, signer.ed25519)) continue;
+      const prev = vc.open(env, id);
+      if (!prev || !prev.equals(input)) continue;
+      if (!canWrite) return blob;
+      if (!sameSet(Object.keys(env.keys), Object.keys(recipients))) continue;
       // A recipient's key changed (set-key): re-wrap. `rekey` also re-seals pre-key-id envelopes.
       if (vc.staleRecipients(env, recipients, { strict: process.env.EYESONLY_RESEAL === '1' }).length) continue;
-      const signer = policy.keys?.[env.signer];
-      if (!signer || !allowed.includes(env.signer) || !vc.verify(env, signer.ed25519)) continue;
-      const prev = vc.open(env, id);
-      if (prev && prev.equals(input)) return blob;
+      return blob;
     } catch {
       /* fall through and re-seal */
     }
   }
+  if (!canWrite) die(`'${id.name}' can read but not write '${file}' (read-only; writers: ${writers.join(', ') || 'nobody'}). Restore it with: git checkout -- ${file}`);
   return vc.seal({ plaintext: input, path: file, recipients, signer: id });
 }
 
@@ -567,7 +631,7 @@ export function tryOpen(blob, file, policy, id) {
     return { error: e.message };
   }
   if (file && env.path !== file) return { error: `envelope is bound to '${env.path}', not '${file}' (run eyesonly rekey)` };
-  const allowed = policy ? fileRule(policy, env.path) || [] : [];
+  const allowed = policy ? writersOf(policy, env.path) || [] : [];
   const signer = policy?.keys?.[env.signer];
   if (!signer || !vc.verify(env, signer.ed25519)) return { env, error: `bad or unknown signature (signer '${env.signer}')` };
   if (!allowed.includes(env.signer)) return { env, error: `signer '${env.signer}' is not an allowed writer of '${env.path}'` };
@@ -639,6 +703,8 @@ async function cmdStatus() {
   const id = loadIdentity({ required: false });
   const top = gitStr(['rev-parse', '--show-toplevel']);
   console.log(`repo ${policy.repo} as ${policy.user ?? id?.name ?? '(no identity)'}${id ? '' : ' (no local identity!)'}${policy.mode === 'repo' ? `  [repo mode, policy v${policy.version}]` : ''}`);
+  const trust = attest.loadTrust(gitDir());
+  console.log(`pinned admins: ${trust?.admins && Object.keys(trust.admins).length ? Object.entries(trust.admins).map(([a, fp]) => `${a} ${fp}`).join(', ') : '(none: the policy is unsigned, or not fetched yet)'}`);
   if (policy.mode === 'repo') await (await repoMode()).warnIfPolicyBehind(policy, top);
   for (const f of protectedFiles(policy, top)) {
     const allowed = fileRule(policy, f);
@@ -666,7 +732,9 @@ function cmdRekey() {
   const policy = loadPolicy();
   const id = loadIdentity();
   const top = gitStr(['rev-parse', '--show-toplevel']);
-  const mine = protectedFiles(policy, top).filter((f) => fileRule(policy, f).includes(id.name));
+  const readable = protectedFiles(policy, top).filter((f) => fileRule(policy, f).includes(id.name));
+  const mine = readable.filter((f) => writersOf(policy, f).includes(id.name));
+  if (mine.length < readable.length) log(`read-only, not rekeyed (a writer does it): ${readable.filter((f) => !mine.includes(f)).join(', ')}`);
   const skipped = mine.filter((f) => vc.isEnvelope(fs.readFileSync(path.join(top, f))));
   const files = mine.filter((f) => !skipped.includes(f));
   if (skipped.length) log(`can't rekey (not decrypted here): ${skipped.join(', ')}`);
@@ -896,8 +964,12 @@ repo mode (no server; the signed policy lives in .eyesonly/policy.json):
   eyesonly join                write your public card to .eyesonly/requests/ for an admin to grant
   eyesonly grant <name> [--card <card> | --from-request] [--group <g>] [--files <glob>] [--admin]
   eyesonly revoke <name> [--group <g>]
-  eyesonly policy show         rules, members, admins and their fingerprints
-  eyesonly verify [<base> [<head>]] | --range <a>..<b>
+  eyesonly grant <name> --read-only | --writer | --ssh-signing-key <key|file.pub>
+  eyesonly revoke <name> --writer
+  eyesonly policy show         rules, writers, members, admins and pinned fingerprints (both modes)
+  eyesonly migrate --to <server-url> [--remote eyesonly]
+                               (admin) move this repo onto an Eyes Only server; pins carry over
+  eyesonly verify [<base> [<head>]] | --range <a>..<b> [--require-signed]
                                check commits like the server would (CI and the pre-push hook)
 
 identity: EYESONLY_IDENTITY (JSON or base64 of it), else $EYESONLY_HOME/identity.json
@@ -917,6 +989,7 @@ export async function main(argv) {
     clone: cmdClone,
     setup: cmdSetup,
     'pull-policy': cmdPullPolicy,
+    migrate: cmdMigrate,
     'policy-sign': (a) => attest.cmdPolicySign(a),
     status: cmdStatus,
     rekey: cmdRekey,

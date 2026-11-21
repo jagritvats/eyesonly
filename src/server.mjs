@@ -190,7 +190,9 @@ function cmdPolicy([sub, name, file]) {
   }
   if (sub === 'manifest') {
     const installed = loadAttestation(dir);
-    const version = (installed?.manifest.version || 0) + 1;
+    // After `import`, the first server version must exceed the repo policy's, so clients that
+    // pinned admins in GitHub mode see the version go up, never down.
+    const version = Math.max(installed?.manifest.version || 0, importFloor(dir)) + 1;
     return console.log(attest.canonical(attest.buildManifest({ repo: name, policy: loadPolicy(dir), users: loadUsers(), version })));
   }
   if (sub === 'attest') {
@@ -222,6 +224,92 @@ function cmdPolicy([sub, name, file]) {
     return console.error(`installed policy v${v} signed by ${att.signer}. Members pick it up with \`eyesonly pull-policy\`.`);
   }
   die('usage: eyesonly-server policy show|set <name.git> [file|-] | manifest <name.git> | attest <name.git> <signed.json>');
+}
+
+const importFile = (dir) => path.join(dir, 'eyesonly-import.json');
+function importFloor(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(importFile(dir), 'utf8')).version || 0;
+  } catch {
+    return 0;
+  }
+}
+
+const IMPORT_USAGE = 'usage: eyesonly-server import <name.git> --policy <.eyesonly/policy.json> [--admin-card <eyesonlypub1:...>]';
+
+/**
+ * GitHub mode -> server. Reads a repo's signed .eyesonly/policy.json, checks its signature,
+ * registers its members with the keys it lists (tokens printed once), and creates the repo
+ * with the same rules. The repo policy's signature can't be reused: a server manifest binds
+ * the server repo name and only the keys of file audiences, so an admin signs once more with
+ * the same key; clients that pinned that admin in GitHub mode accept it without re-pinning.
+ */
+async function cmdImport(args) {
+  const opt = (k) => (args.includes(k) ? args[args.indexOf(k) + 1] : undefined);
+  const name = args[0];
+  const file = opt('--policy');
+  if (!name || name.startsWith('--') || !file) die(IMPORT_USAGE);
+  if (!REPO_RE.test(name)) die('repo name must look like name.git');
+  if (fs.existsSync(repoDir(name))) die(`repo ${name} already exists; import only creates new repos`);
+  const rp = await import('./repo-policy.mjs');
+  let m;
+  try {
+    const att = rp.parseAttestation(fs.readFileSync(file, 'utf8'));
+    m = rp.resolveRepoPolicy(att, { trust: null, pin: process.env.EYESONLY_PIN_ADMIN }).manifest;
+    if (opt('--admin-card') !== undefined) {
+      const card = readCard(opt('--admin-card'), '--admin-card');
+      if (!m.policy.admins.includes(card.name) || m.keys[card.name]?.ed25519 !== card.ed25519 || m.keys[card.name]?.x25519 !== card.x25519) {
+        throw new Error(`'${card.name}' with that card is not an admin of this policy`);
+      }
+      if (att.signer !== card.name) throw new Error(`the policy is signed by '${att.signer}', not by '${card.name}'`);
+    }
+  } catch (e) {
+    die(`can't import ${file}: ${e.message}`);
+  }
+  const rules = rp.rulesOf(m);
+  // Users: reuse existing ones only if their keys match exactly; never change a key here.
+  const users = loadUsers();
+  const fresh = [];
+  for (const [u, k] of Object.entries(m.keys)) {
+    if (!Object.hasOwn(users, u)) fresh.push(u);
+    else if (users[u].x25519 !== k.x25519 || users[u].ed25519 !== k.ed25519) {
+      die(`user '${u}' already exists on this server with a different key. Fix that first (eyesonly-server user set-key), then import again.`);
+    }
+  }
+  let policy;
+  try {
+    policy = validatePolicy({
+      members: rules.members,
+      admins: rules.admins,
+      groups: rules.groups,
+      files: rules.files,
+      branches: rules.branches || {},
+      ...(rules.writers !== undefined ? { writers: rules.writers } : {}),
+    });
+  } catch (e) {
+    die(`the repo policy doesn't convert to a server policy: ${e.message}`);
+  }
+  fs.mkdirSync(DATA(), { recursive: true, mode: 0o700 });
+  const tokens = fresh.map((u) => [u, addUser(users, { name: u, ...m.keys[u] })]);
+  const dir = createRepo(name, policy);
+  fs.writeFileSync(importFile(dir), JSON.stringify({ from: m.repo, version: m.version, admins: rules.admins, imported: new Date().toISOString() }, null, 2));
+  const e = (s) => console.error(s);
+  e(`imported ${name} from GitHub-mode policy v${m.version} (repo id ${m.repo})`);
+  e(`  admins  ${rules.admins.map((a) => `${a} ${attest.adminFingerprint(m.keys[a].ed25519)}`).join(', ')}`);
+  e(`  members ${Object.keys(m.keys).join(', ')}${fresh.length < Object.keys(m.keys).length ? ` (${Object.keys(m.keys).length - fresh.length} already registered)` : ''}`);
+  if (tokens.length) e('Tokens, shown once (name<TAB>token); give each person theirs:');
+  for (const [u, t] of tokens) console.log(`${u}\t${t}`);
+  e(`
+Next:
+  1. An admin signs the server's policy with the SAME key members already pinned:
+       eyesonly-server policy manifest ${name} > m.json        # on the server
+       eyesonly policy-sign m.json > s.json                     # on the admin's machine
+       eyesonly-server policy attest ${name} s.json             # on the server
+  2. The admin moves the repo (pushes every branch, tag and refs/eyesonly/*):
+       eyesonly migrate --to https://<admin>:<token>@<host>/${name}
+  3. Everyone else, in their clone:
+       git remote add eyesonly https://<name>:<token>@<host>/${name}
+       git fetch eyesonly && eyesonly setup --remote eyesonly --mode server`);
 }
 
 const INIT_USAGE =
@@ -544,6 +632,7 @@ function hookPreReceive() {
     gBuf,
     reject,
     isAdmin,
+    writers: new Set(all.filter((u) => refguard.canWrite(policy, u, all))),
     authorize: (kind, file, commit, allowed) => {
       if (!allowed.has(user)) reject(`'${user}' may not ${kind} protected file '${file}' (${commit.slice(0, 8)})`);
     },
@@ -637,6 +726,8 @@ const USAGE = `eyesonly-server: auth proxy + policy enforcement for eyesonly rep
   eyesonly-server user list
   eyesonly-server repo create <name.git> --admin <user>
   eyesonly-server repo list
+  eyesonly-server import <name.git> --policy <.eyesonly/policy.json> [--admin-card <card>]
+                                                   create a repo from a GitHub-mode policy (members, keys, rules)
   eyesonly-server policy show <name.git>
   eyesonly-server policy set <name.git> <file|->   replace the policy (validated)
   eyesonly-server policy manifest <name.git>       print the policy manifest for an admin to sign
@@ -650,6 +741,7 @@ export async function main([cmd, ...rest]) {
   if (cmd === 'init') return cmdInit(rest);
   if (cmd === 'user') return cmdUser(rest);
   if (cmd === 'repo') return cmdRepo(rest);
+  if (cmd === 'import') return cmdImport(rest);
   if (cmd === 'policy') return cmdPolicy(rest);
   if (cmd === 'serve') return cmdServe(rest);
   if (cmd === 'mirror') return (await import('./mirror.mjs')).cmdMirror(rest);

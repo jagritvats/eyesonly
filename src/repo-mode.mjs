@@ -231,6 +231,24 @@ function flags(args, spec) {
 const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,38}$/i;
 const cardOf = (id) => ({ x25519: id.x25519.pub, ed25519: id.ed25519.pub });
 
+const SSH_KEY_RE = /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) ([A-Za-z0-9+/]+={0,3})(?:\s|$)/;
+
+/** `--ssh-signing-key` value: a public key, or a path to a .pub file. Returns "<type> <base64>". */
+function readSshKey(arg) {
+  let text = arg;
+  if (!SSH_KEY_RE.test(arg.trim()) && fs.existsSync(arg)) text = fs.readFileSync(arg, 'utf8');
+  const line = text.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || '';
+  const m = SSH_KEY_RE.exec(line);
+  if (!m) die(`--ssh-signing-key: not an SSH public key (expected e.g. "ssh-ed25519 AAAA..." or a path to a .pub file)`);
+  if (/PRIVATE KEY/.test(text)) die('--ssh-signing-key: that is a private key; pass the .pub file');
+  return `${m[1]} ${m[2]}`;
+}
+
+/** Writers as an explicit list of names (needed to take one person out of "*" or a group). */
+function explicitWriters(rules, keys) {
+  return [...rp.effectiveWriters(rules, Object.keys(keys))].filter((u) => !rules.admins.includes(u)).sort();
+}
+
 /**
  * The policy an admin edits: the working-tree file if it verifies against the pinned trust
  * (so several grants can be chained before committing), else the default branch's.
@@ -333,9 +351,10 @@ export function cmdJoin() {
 }
 
 export function cmdGrant(args) {
-  const o = flags(args, { card: String, 'from-request': Boolean, group: String, files: String, admin: Boolean });
+  const o = flags(args, { card: String, 'from-request': Boolean, group: String, files: String, admin: Boolean, 'read-only': Boolean, writer: Boolean, 'ssh-signing-key': String });
   const name = o._[0];
-  if (!name || !NAME_RE.test(name)) die('usage: eyesonly grant <name> [--card <eyesonlypub1:...> | --from-request] [--group <g>] [--files <glob>] [--admin]');
+  if (!name || !NAME_RE.test(name)) die('usage: eyesonly grant <name> [--card <eyesonlypub1:...> | --from-request] [--group <g>] [--files <glob>] [--admin] [--read-only | --writer] [--ssh-signing-key <key|file.pub>]');
+  if (o['read-only'] && (o.writer || o.admin)) die('--read-only can\'t be combined with --writer or --admin');
   const top = repoTop();
   const id = loadIdentity();
   const { manifest: m } = editablePolicy(top);
@@ -361,12 +380,19 @@ export function cmdGrant(args) {
     keys[name] = { x25519: card.x25519, ed25519: card.ed25519 };
   }
   if (!keys[name]) die(`no key for '${name}': pass --card <card>, or have them run \`eyesonly join\` and use --from-request`);
+  const did = [];
+  if (o['ssh-signing-key']) {
+    keys[name] = { ...keys[name], ssh_signing: readSshKey(o['ssh-signing-key']) };
+    did.push('SSH signing key');
+  }
 
   const groups = Object.keys(rules.groups);
   let group = o.group;
-  if (!group && !o.files && !o.admin && !cardText) die(`nothing to change: pass --group <g>, --files <glob> or --admin`);
-  if (!group && !o.files && groups.length === 1) group = groups[0];
-  const did = [];
+  if (!group && !o.files && !o.admin && !cardText && !o['read-only'] && !o.writer && !o['ssh-signing-key']) {
+    die(`nothing to change: pass --group <g>, --files <glob>, --admin, --read-only, --writer or --ssh-signing-key`);
+  }
+  // A single group is the default audience, except for --writer / --ssh-signing-key on their own.
+  if (!group && !o.files && groups.length === 1 && !((o.writer || o['ssh-signing-key']) && !cardText && !o.admin)) group = groups[0];
   if (group) {
     if (!NAME_RE.test(group)) die(`invalid group name '${group}'`);
     rules.groups[group] ||= [];
@@ -382,17 +408,28 @@ export function cmdGrant(args) {
     rules.admins.push(name);
     did.push('admins');
   }
+  if (o['read-only']) {
+    if (rules.admins.includes(name)) die(`'${name}' is an admin, and admins always write. Revoke them first, then grant them again --read-only.`);
+    rules.writers = explicitWriters(rules, keys).filter((u) => u !== name);
+    did.push('read-only');
+  }
+  if (o.writer) {
+    if (rules.writers === undefined) log(`'${name}' already writes: writers default to every member`);
+    else if (!rp.effectiveWriters(rules, Object.keys(keys)).has(name)) rules.writers = [...rules.writers, name];
+    did.push('writer');
+  }
   const next = publish(top, m, rules, keys, id);
   if (fs.existsSync(reqPath)) fs.rmSync(reqPath);
   const readable = next.files.filter(([, who]) => who.includes(name)).map(([g]) => g);
-  log(`granted ${name}${did.length ? ` (${did.join(', ')})` : ''}: policy v${next.version}. ${name} can read: ${readable.join(', ') || 'nothing yet'}`);
+  const writes = rp.effectiveWriters(rp.rulesOf(next), Object.keys(next.keys)).has(name);
+  log(`granted ${name}${did.length ? ` (${did.join(', ')})` : ''}: policy v${next.version}. ${name} can read: ${readable.join(', ') || 'nothing yet'}${readable.length ? (writes ? ' (and write)' : ' (read-only)') : ''}`);
   log(`next: git add ${rp.POLICY_FILE}${o.files ? ' .gitattributes' : ''}${fs.existsSync(path.join(top, rp.REQUESTS_DIR)) ? ` ${rp.REQUESTS_DIR}` : ''} && git commit -m "eyesonly: grant ${name}", then \`eyesonly rekey\`, commit and push`);
 }
 
 export function cmdRevoke(args) {
-  const o = flags(args, { group: String });
+  const o = flags(args, { group: String, writer: Boolean });
   const name = o._[0];
-  if (!name) die('usage: eyesonly revoke <name> [--group <g>]');
+  if (!name) die('usage: eyesonly revoke <name> [--group <g> | --writer]');
   const top = repoTop();
   const id = loadIdentity();
   const { manifest: m } = editablePolicy(top);
@@ -400,7 +437,11 @@ export function cmdRevoke(args) {
   const rules = structuredClone(rp.rulesOf(m));
   const keys = { ...m.keys };
   const drop = (list) => list.filter((x) => x !== name);
-  if (o.group) {
+  if (o.writer) {
+    if (!keys[name]) die(`'${name}' isn't in the policy`);
+    if (rules.admins.includes(name)) die(`'${name}' is an admin, and admins always write`);
+    rules.writers = explicitWriters(rules, keys).filter((u) => u !== name);
+  } else if (o.group) {
     if (!rules.groups[o.group]) die(`no group '${o.group}'`);
     rules.groups[o.group] = drop(rules.groups[o.group]);
   } else {
@@ -409,28 +450,64 @@ export function cmdRevoke(args) {
     for (const g of Object.keys(rules.groups)) rules.groups[g] = drop(rules.groups[g]);
     for (const f of Object.keys(rules.files)) rules.files[f] = drop(rules.files[f]);
     rules.admins = drop(rules.admins);
+    if (rules.writers) rules.writers = drop(rules.writers);
     delete keys[name];
   }
   const next = publish(top, m, rules, keys, id);
-  log(`revoked ${name}${o.group ? ` from @${o.group}` : ''}: policy v${next.version}`);
+  log(`revoked ${name}${o.writer ? "'s write access (read-only now)" : o.group ? ` from @${o.group}` : ''}: policy v${next.version}`);
   log(`next: git add ${rp.POLICY_FILE} && git commit -m "eyesonly: revoke ${name}", then \`eyesonly rekey\`, commit and push`);
   log(`revocation isn't retroactive: rotate what ${name} could read (\`eyesonly audit ${name}\`)`);
+}
+
+/** The admins this clone pinned (trust.json), as printable lines. */
+export function pinnedAdminLines() {
+  const trust = attest.loadTrust(gitDir());
+  if (!trust?.admins || !Object.keys(trust.admins).length) return ['  (none pinned yet; eyesonly setup pins them on first contact)'];
+  return Object.entries(trust.admins).map(([a, fp]) => `  ${a}  ${fp}`);
+}
+
+/** Server mode: what this clone knows (the cached, admin-verified view) plus the pinned admins. */
+function showServerPolicy(top) {
+  const p = (() => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(gitDir(), 'eyesonly', 'policy.json'), 'utf8'));
+    } catch {
+      return null;
+    }
+  })();
+  if (!p) die('no eyesonly policy cached for this repo. Run: eyesonly setup');
+  console.log(`repo ${p.repo} (server mode) as ${p.user ?? '(unknown)'}`);
+  console.log('pinned admins (EYESONLY_PIN_ADMIN fingerprints):');
+  pinnedAdminLines().forEach((l) => console.log(l));
+  console.log('files (first match wins):');
+  for (const [glob, who] of Object.entries(p.files || {})) console.log(`  ${glob}  -> ${who.join(', ') || '(nobody)'}`);
+  console.log('keys:');
+  for (const [u, k] of Object.entries(p.keys || {})) console.log(`  ${u}  ${vc.fingerprint(k)}`);
+  console.log('(the full policy lives on the server: eyesonly-server policy show <repo>)');
 }
 
 export function cmdPolicy([sub]) {
   if (sub && sub !== 'show') die('usage: eyesonly policy show');
   const top = repoTop();
+  if (tryGit(['config', '--local', 'eyesonly.mode'], { cwd: top }) === 'server') return showServerPolicy(top);
   const { manifest: m } = editablePolicy(top);
   const rules = rp.rulesOf(m);
+  const writers = rp.effectiveWriters(rules, Object.keys(m.keys));
   console.log(`repo ${m.repo}  policy v${m.version}`);
-  console.log('admins:');
+  console.log('admins (EYESONLY_PIN_ADMIN fingerprints):');
   for (const a of rules.admins) console.log(`  ${a}  ${attest.adminFingerprint(m.keys[a].ed25519)}`);
+  console.log('pinned in this clone:');
+  pinnedAdminLines().forEach((l) => console.log(l));
   console.log('groups:');
   for (const [g, who] of Object.entries(rules.groups)) console.log(`  @${g}: ${who.join(', ') || '(empty)'}`);
+  console.log(`writers: ${rules.writers === undefined ? 'every member (default)' : `${JSON.stringify(rules.writers)} + admins`}`);
   console.log('files (first match wins):');
-  for (const [glob, who] of m.files) console.log(`  ${glob}  ${JSON.stringify(rules.files[glob])} -> ${who.join(', ') || '(nobody)'}`);
+  for (const [glob, who] of m.files) {
+    const ro = who.filter((u) => !writers.has(u));
+    console.log(`  ${glob}  ${JSON.stringify(rules.files[glob])} -> ${who.join(', ') || '(nobody)'}${ro.length ? `  (read-only: ${ro.join(', ')})` : ''}`);
+  }
   console.log('members:');
-  for (const [u, k] of Object.entries(m.keys)) console.log(`  ${u}  ${vc.fingerprint(k)}`);
+  for (const [u, k] of Object.entries(m.keys)) console.log(`  ${u}  ${vc.fingerprint(k)}${writers.has(u) ? '' : '  read-only'}${k.ssh_signing ? `  ssh-signing ${k.ssh_signing.split(' ')[0]}` : ''}`);
   const req = path.join(top, rp.REQUESTS_DIR);
   const pending = fs.existsSync(req) ? fs.readdirSync(req).filter((f) => f.endsWith('.pub')) : [];
   if (pending.length) console.log(`pending requests: ${pending.map((f) => f.slice(0, -4)).join(', ')}  (eyesonly grant <name> --from-request)`);

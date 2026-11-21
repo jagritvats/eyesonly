@@ -33,6 +33,10 @@ inputs:
     description: eyesonly version to install from npm
     required: false
     default: latest
+  require-signed:
+    description: "verify: also require every commit to be signed with a member's SSH signing key from the policy, and attribute protected-file changes to that signer"
+    required: false
+    default: 'false'
   allow-locked:
     description: Don't fail when a file this user is a reader of stays encrypted
     required: false
@@ -62,6 +66,7 @@ runs:
         EO_PATH: ${{ inputs.path == 'app' && '.' || inputs.path }}
         EO_VERSION: ${{ inputs.version }}
         EO_RANGE: ${{ inputs.range }}
+        EO_REQUIRE_SIGNED: ${{ inputs.require-signed }}
         EO_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         EO_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       run: bash "$GITHUB_ACTION_PATH/action/verify.sh"

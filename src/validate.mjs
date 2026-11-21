@@ -27,10 +27,12 @@ export const gitRunner = (cwd) => ({
  * @param {(args:string[]) => Buffer} o.gBuf   git, stdout as Buffer
  * @param {(msg:string) => never} o.reject
  * @param {(kind:string, file:string, commit:string, allowed:Set<string>) => void} o.authorize
+ * @param {Set<string>} [o.writers]  who may sign protected files at all (writers + admins);
+ *                                   a signer must be in the path's audience AND here
  * @param {boolean} [o.isAdmin]  may change .lfsconfig endpoints
  * @param {(msg:string) => void} [o.note]
  */
-export function contentChecker({ policy, users, g, gBuf, reject, authorize, isAdmin = false, note = (m) => console.error(m) }) {
+export function contentChecker({ policy, users, g, gBuf, reject, authorize, writers = null, isAdmin = false, note = (m) => console.error(m) }) {
   const all = Object.keys(users);
   const treeCache = new Map();
   const protectedEntries = (commit) => {
@@ -62,7 +64,7 @@ export function contentChecker({ policy, users, g, gBuf, reject, authorize, isAd
       reject(`${at}: ${e.message}`);
     }
     if (env.path !== file) reject(`${at} is encrypted for path '${env.path}'. Run \`eyesonly rekey\` after renaming protected files.`);
-    if (!allowed.has(env.signer) || !users[env.signer] || !vc.verify(env, users[env.signer].ed25519)) {
+    if (!allowed.has(env.signer) || (writers && !writers.has(env.signer)) || !users[env.signer] || !vc.verify(env, users[env.signer].ed25519)) {
       reject(`${at} has an invalid signature or its signer '${env.signer}' may not write it`);
     }
     const recips = new Set(Object.keys(env.keys));

@@ -17,7 +17,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
-import { fileRule } from './policy.mjs';
+import { fileRule, writersOf } from './policy.mjs';
 import { commonGitDir, checkResolvedFilters } from './attrs.mjs';
 import { identitySource, readIdentity } from './identity.mjs';
 
@@ -179,8 +179,9 @@ function inspect(policy, p, blob, allowed) {
 
 function reseal(policy, p, env, allowed, id) {
   if (!allowed.includes(id.name)) return { error: `cannot rekey '${p}': '${id.name}' is not in its audience (allowed: ${allowed.join(', ')})` };
+  if (!writersOf(policy, p).includes(id.name)) return { error: `cannot rekey '${p}': '${id.name}' is read-only for it (writers: ${writersOf(policy, p).join(', ') || 'nobody'})` };
   const signer = policy.keys?.[env.signer];
-  const signerAllowed = fileRule(policy, env.path) || [];
+  const signerAllowed = writersOf(policy, env.path) || [];
   if (!signer || !vc.verify(env, signer.ed25519) || !signerAllowed.includes(env.signer)) {
     return { error: `cannot rekey '${p}': bad or unknown signature (signer '${env.signer}')` };
   }

@@ -2,9 +2,14 @@
 //
 //   .eyesonly/policy.json = attestation { manifest, signer, signer_ed25519, sig }
 //   manifest = { v: 1, kind: 'repo', repo: <random id>, version,
-//                policy: { members, admins, groups, files },     // the rules as written
+//                policy: { members, admins, groups, files, writers? }, // the rules as written
 //                files: [[glob, [users]], ...],                  // expanded audiences, rule order
-//                keys: { user: { x25519, ed25519 } } }           // every member's public keys
+//                keys: { user: { x25519, ed25519, ssh_signing? } } } // every member's public keys
+//
+// `writers` (optional, default: members) narrows who may sign protected files, exactly like
+// the server's `writers`: a writer of a path is in its audience AND a writer; admins always
+// write. `ssh_signing` is an optional SSH public key used by `eyesonly verify --require-signed`
+// to attribute commits.
 //
 // It is the server flow's signed manifest (src/attest.mjs) plus the raw rules, so admins can
 // edit groups and `eyesonly verify` can apply the same checks as the server's hook. The repo id
@@ -81,12 +86,18 @@ function expandFiles(policy, keys) {
   return Object.entries(policy.files || {}).map(([glob, who]) => [glob, [...expand(policy, who, all)].sort()]);
 }
 
+/** Everyone who may sign protected files: writers (default members) plus admins. */
+export function effectiveWriters(rules, all) {
+  return new Set([...expand(rules, rules.writers ?? rules.members, all), ...expand(rules, rules.admins || [], all)]);
+}
+
 export function buildRepoManifest({ repo, version, policy, keys }) {
   const rules = {
     members: policy.members || ['*'],
     admins: policy.admins || [],
     groups: policy.groups || {},
     files: policy.files || {},
+    ...(policy.writers !== undefined ? { writers: policy.writers } : {}),
   };
   return { v: 1, kind: 'repo', repo, version, policy: rules, files: expandFiles(rules, keys), keys };
 }
@@ -98,6 +109,8 @@ export function validRepoManifest(m) {
   if (!p || typeof p !== 'object' || !names(p.members) || !names(p.admins) || !p.admins.length) return false;
   if (!p.groups || typeof p.groups !== 'object' || !Object.values(p.groups).every(names)) return false;
   if (!p.files || typeof p.files !== 'object' || !Object.values(p.files).every(names)) return false;
+  if (p.writers !== undefined && !names(p.writers)) return false;
+  if (!Object.values(m.keys).every((k) => k.ssh_signing === undefined || typeof k.ssh_signing === 'string')) return false;
   if (!p.admins.every((a) => Object.hasOwn(m.keys, a))) return false;
   // The expanded audiences must be what the rules say, in the same order.
   const globs = m.files.map(([g]) => g);
@@ -113,7 +126,8 @@ export function rulesOf(m) {
 
 /** The .git/eyesonly/policy.json cache the filters read. */
 export function cachePolicy(m, user) {
-  return { ...attest.manifestToPolicy(m, user), mode: 'repo', version: m.version };
+  const writers = [...effectiveWriters(rulesOf(m), Object.keys(m.keys))].sort();
+  return { ...attest.manifestToPolicy(m, user), mode: 'repo', version: m.version, writers };
 }
 
 const fingerprints = (m, who) => Object.fromEntries(who.map((a) => [a, attest.adminFingerprint(m.keys[a].ed25519)]));

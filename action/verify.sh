@@ -24,5 +24,7 @@ if [[ -z "$range" ]]; then
   [[ -z "$base" || "$base" =~ ^0+$ ]] && base=""   # new branch: verify falls back to the default branch
   range="${base}..${head}"
 fi
-echo "eyesonly verify --range $range"
-eyesonly verify --range "$range"
+extra=()
+[[ "${EO_REQUIRE_SIGNED:-false}" == true ]] && extra+=(--require-signed)
+echo "eyesonly verify --range $range ${extra[*]:-}"
+eyesonly verify --range "$range" ${extra[@]+"${extra[@]}"}

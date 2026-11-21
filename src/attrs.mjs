@@ -126,7 +126,11 @@ export function checkCommitAttributes({ commit, parents, policy, git, reject, is
   for (const parent of parents) nul(git(['diff-tree', '-r', '-z', '--name-only', '--no-renames', parent, commit])).forEach((p) => touched.add(p));
   const attrFiles = [...touched].filter(isAttrFile);
   const lfsTouched = [...touched].some(isLfsConfig);
-  if (!attrFiles.length && !lfsTouched) return;
+  // Protected paths added or changed here are probed too: an earlier commit may have
+  // planted a redirect (e.g. `secrets/**/*.pem filter=lfs`) that none of the sample
+  // paths matched, and this is the commit where a file finally lands under it.
+  const protTouched = [...touched].filter((p) => fileRule(policy, p));
+  if (!attrFiles.length && !lfsTouched && !protTouched.length) return;
 
   // Case-insensitive filesystems (macOS, Windows) read `.GitAttributes` as `.gitattributes`;
   // git check-attr --source does not. Refuse the ambiguity instead of guessing.
@@ -142,12 +146,13 @@ export function checkCommitAttributes({ commit, parents, policy, git, reject, is
   }
   if (!gitVersionOk) reject(`server git too old for attribute checks (need >= ${MIN_GIT.join('.')})`);
 
-  if (attrFiles.length) checkFilters({ commit, parents, policy, git, reject, attrFiles, short, nul });
+  if (attrFiles.length || protTouched.length) checkFilters({ commit, parents, policy, git, reject, attrFiles, extra: protTouched, short, nul });
   if (lfsTouched && !isAdmin) checkLfsConfig({ commit, parents, git, reject });
 }
 
-function checkFilters({ commit, parents, policy, git, reject, attrFiles, short, nul }) {
-  const probes = new Set(nul(git(['ls-tree', '-r', '-z', '--name-only', commit])).filter((p) => fileRule(policy, p)));
+function checkFilters({ commit, parents, policy, git, reject, attrFiles, extra = [], short, nul }) {
+  const probes = new Set(extra);
+  if (attrFiles.length) nul(git(['ls-tree', '-r', '-z', '--name-only', commit])).filter((p) => fileRule(policy, p)).forEach((p) => probes.add(p));
   const samples = globSamples(policy);
   for (const s of samples) probes.add(s);
   // A nested .gitattributes only affects its own subtree: probe that directory too.

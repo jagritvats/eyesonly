@@ -379,6 +379,11 @@ function pushLocked(dir, cfg, token, trustCurrent) {
   const skipped = [];
   for (const ref of snapshot.keys()) {
     if (!allowed(ref)) continue;
+    // A tag can point straight at a tree or blob; those carry no commit to verify, so
+    // the history checks below would wave them through. Only commits go upstream.
+    if (isPublic(ref) && git(dir, ['cat-file', '-t', `${snapshot.get(ref)}^{}`]).trim() !== 'commit') {
+      fail(`ref ${ref} does not point at a commit; refusing to mirror it`);
+    }
     if (isPublic(ref)) eligible.push(ref);
     else {
       skipped.push(ref);

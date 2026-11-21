@@ -468,6 +468,23 @@ function hookPreReceive() {
     }
   };
 
+  const isAdmin = expand(policy, policy.admins || [], all).has(user);
+  // Objects received in this push live in the quarantine dir until the hook accepts them.
+  // Anything else this push references was already on the server.
+  const notInQuarantine = (oids) => {
+    if (!oids.length) return [];
+    const q = process.env.GIT_QUARANTINE_PATH;
+    if (!q) return oids; // no pack was sent at all
+    const out = execFileSync('git', ['cat-file', '--batch-check=%(objectname)'], {
+      input: oids.join('\n') + '\n',
+      encoding: 'utf8',
+      maxBuffer: 1 << 30,
+      env: { ...process.env, GIT_OBJECT_DIRECTORY: q, GIT_ALTERNATE_OBJECT_DIRECTORIES: '' },
+    });
+    const present = new Set(lines(out).filter((l) => !l.endsWith(' missing')));
+    return oids.filter((o) => !present.has(o));
+  };
+
   let headRef = null;
   try {
     headRef = g(['symbolic-ref', '-q', 'HEAD']) || null;
@@ -491,6 +508,30 @@ function hookPreReceive() {
         const secret = new Set(lines(g(['rev-list', ...narrower, '--not', ...ok])));
         const hit = fresh.find((c) => secret.has(c));
         if (hit) reject(`pushing '${ref}' would expose commit ${hit.slice(0, 8)} from a branch with a narrower audience. Use \`git merge --squash\`.`);
+      }
+    }
+
+    // 1b. Object allowlist. The check above only knows about refs that exist right now
+    //     and only walks commits. Objects from a deleted private branch, or a tree/blob
+    //     named directly by a tag or tree entry, are still in the object store. So every
+    //     object this update makes newly visible must either have been sent in this push
+    //     (the pusher already had it) or already be visible to ref's audience. Admins may
+    //     resurrect orphaned objects (e.g. to restore a deleted branch).
+    if (!isAdmin) {
+      const peeled = g(['cat-file', '-t', `${newOid}^{}`]);
+      if (peeled !== 'commit') reject(`'${ref}' must point at a commit, not a ${peeled}`);
+      const newly = lines(g(['rev-list', '--objects', newOid, '--not', ...(oldOid !== ZERO ? [oldOid] : []), ...ok])).map((l) => l.split(' ')[0]);
+      let stale = notInQuarantine(newly);
+      // `rev-list --objects X --not Y` only excludes objects at Y's boundary, not every
+      // object in Y's history, so a revert to an old blob shows up here even though the
+      // audience can already see it. Settle the remaining candidates with a full walk.
+      const visibleTips = [...(oldOid !== ZERO ? [oldOid] : []), ...ok];
+      if (stale.length && visibleTips.length) {
+        const visible = new Set(lines(g(['rev-list', '--objects', '--no-object-names', ...visibleTips])));
+        stale = stale.filter((o) => !visible.has(o));
+      }
+      if (stale.length) {
+        reject(`pushing '${ref}' would expose ${stale.length} existing object(s) its audience can't see (e.g. ${stale[0].slice(0, 8)}), such as history from a private or deleted branch. Push the content itself, or ask an admin.`);
       }
     }
 

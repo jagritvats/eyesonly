@@ -12,7 +12,7 @@ junior$ git push         →  [veil] REJECTED: 'junior' may not modify protected
 
 - **Plan:** [PLAN.md](PLAN.md). **Threat model:** [THREAT_MODEL.md](THREAT_MODEL.md).
 - **Website:** `site/index.html` (served at `/` by `veil-server serve`).
-- **Proof:** `npm test` runs 422 adversarial end-to-end checks (8 suites) against a real server.
+- **Proof:** `npm test` runs 436 adversarial end-to-end checks (8 suites) against a real server.
 
 ## Quickstart
 

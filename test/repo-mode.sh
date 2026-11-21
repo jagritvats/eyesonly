@@ -115,7 +115,7 @@ echo "== forged and unauthorized envelopes"
 cd "$SB/junior"
 as junior git checkout -q -b forged
 seal junior .env "STRIPE_SECRET=sk_evil" alice bob junior
-as junior git add .env && as junior git commit -q --no-verify -m forged 2>/dev/null
+as junior git $NOF add .env && as junior git $NOF commit -q --no-verify -m forged 2>/dev/null
 expect_reject "junior's pre-push hook blocks his own forged .env" "may not write it" as junior git push -q origin forged
 expect_ok "junior pushes it anyway (--no-verify): the host can't refuse" as junior git push -q --no-verify origin forged
 expect_reject "verify rejects the forged envelope" "signer 'junior' may not write it" in_ "$SB/bob" bash -c "git fetch -q origin && $EYESONLY verify --range origin/main..origin/forged"
@@ -123,10 +123,16 @@ in_ "$SB/bob" as bob git checkout -q forged 2>"$SB/smudge.err"
 check "bob's smudge refuses the forged envelope" grep -q "is not an allowed writer\|bad or unknown signature" "$SB/smudge.err"
 expect_out "bob's working .env stays ciphertext" "EYESONLY-V1" head -1 "$SB/bob/.env"
 in_ "$SB/bob" as bob git checkout -q main
+# The GitHub Action's verify mode, run by hand (no secrets, no install).
+mkdir -p "$SB/bin" && printf '#!/bin/sh\nexec node "%s/bin/eyesonly.mjs" "$@"\n' "$ROOT" > "$SB/bin/eyesonly" && chmod +x "$SB/bin/eyesonly"
+action_verify() { (cd "$SB/bob" && PATH="$SB/bin:$PATH" EO_SKIP_INSTALL=1 EO_PATH=. "$@" bash "$ROOT/action/verify.sh"); }
+expect_reject "Action verify mode fails the forged branch" "may not write it" action_verify env EO_RANGE=origin/main..origin/forged
+expect_ok "Action verify mode passes main (push before..after)" action_verify env EO_BASE="$(git -C "$SB/bob" rev-list --max-parents=0 HEAD)" EO_HEAD=origin/main
+expect_ok "Action verify mode handles a new branch (zero before)" action_verify env EO_BASE=0000000000000000000000000000000000000000 EO_HEAD=origin/main
 cd "$SB/mallory"
 as mallory git checkout -q -b mallory-forge
 seal mallory .env "STRIPE_SECRET=sk_mal" alice bob mallory
-as mallory git add .env && as mallory git commit -q --no-verify -m m 2>/dev/null
+as mallory git $NOF add .env && as mallory git $NOF commit -q --no-verify -m m 2>/dev/null
 as mallory git push -q --no-verify origin mallory-forge
 expect_reject "verify rejects an envelope from an unknown key" "signer 'mallory' may not write it" in_ "$SB/bob" bash -c "git fetch -q origin && $EYESONLY verify --range origin/main..origin/mallory-forge"
 cd "$SB/bob"
@@ -219,6 +225,13 @@ in_ "$SB/bob" as bob git pull -q origin main
 in_ "$SB/bob" as bob $EYESONLY pull-policy >/dev/null 2>&1
 expect_out "bob still reads the rotated .env" "sk_live_rotated" cat "$SB/bob/.env"
 expect_ok "verify accepts the whole real history" in_ "$SB/bob" $EYESONLY verify --range "$(git -C "$SB/bob" rev-list --max-parents=0 HEAD)..main"
+
+echo "== doctor"
+expect_out "doctor reports the signed, pinned policy" "repo mode: policy v" in_ "$SB/bob" as bob $EYESONLY doctor
+expect_out "doctor sees the pre-push hook" "pre-push hook installed" in_ "$SB/bob" as bob $EYESONLY doctor
+mv "$SB/bob/.git/hooks/pre-push" "$SB/pre-push.bak"
+expect_reject "doctor flags a missing pre-push hook" "pre-push hook is missing" in_ "$SB/bob" as bob $EYESONLY doctor
+mv "$SB/pre-push.bak" "$SB/bob/.git/hooks/pre-push"
 
 echo "== mode detection with a server"
 source "$ROOT/test/lib/server.sh"

@@ -1,27 +1,34 @@
 name: Eyes Only checkout
-description: Clone an Eyes Only repo in CI and decrypt the protected files this CI user may read.
+description: Clone an Eyes Only repo in CI and decrypt what this CI user may read, or verify commits in a repo-mode repo (no secrets needed).
 author: Eyes Only contributors
 branding:
   icon: lock
   color: green
 
 inputs:
+  mode:
+    description: "clone (decrypt for a CI user; server mode) or verify (check the pushed or PR commits against the policy in the repo; repo mode, needs actions/checkout with fetch-depth: 0)"
+    required: false
+    default: clone
   url:
-    description: Repo URL on your Eyes Only server, without credentials (https://git.example.com/app.git)
-    required: true
+    description: "clone: repo URL on your Eyes Only server, without credentials (https://git.example.com/app.git)"
+    required: false
   user:
-    description: The CI user's name on the server
-    required: true
+    description: "clone: the CI user's name on the server"
+    required: false
   token:
-    description: The CI user's access token (pass a secret)
-    required: true
+    description: "clone: the CI user's access token (pass a secret)"
+    required: false
   identity:
-    description: The CI user's identity.json, raw or base64 (pass a secret)
-    required: true
+    description: "clone: the CI user's identity.json, raw or base64 (pass a secret)"
+    required: false
   path:
-    description: Directory to clone into
+    description: "clone: directory to clone into. verify: the checkout to verify"
     required: false
     default: app
+  range:
+    description: "verify: <base>..<head> to check (default: the pull request's base..head, or the push's before..after)"
+    required: false
   version:
     description: eyesonly version to install from npm
     required: false
@@ -48,7 +55,18 @@ runs:
       uses: actions/setup-node@v7
       with:
         node-version: 22
+    - id: verify
+      if: inputs.mode == 'verify'
+      shell: bash
+      env:
+        EO_PATH: ${{ inputs.path == 'app' && '.' || inputs.path }}
+        EO_VERSION: ${{ inputs.version }}
+        EO_RANGE: ${{ inputs.range }}
+        EO_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        EO_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: bash "$GITHUB_ACTION_PATH/action/verify.sh"
     - id: clone
+      if: inputs.mode != 'verify'
       shell: bash
       env:
         EO_URL: ${{ inputs.url }}

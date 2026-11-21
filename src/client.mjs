@@ -6,6 +6,7 @@ import * as attest from './attest.mjs';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
+import { installPreCommitHook, cmdPreCommit } from './hooks.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'veil.mjs');
 const VEIL_HOME = () => process.env.VEIL_HOME || path.join(os.homedir(), '.veil');
@@ -149,6 +150,7 @@ function configureFilters(cwd) {
   set('filter.veil.required', 'true');
   set('diff.veil.textconv', `${base} textconv`);
   set('diff.veil.cachetextconv', 'false');
+  installPreCommitHook(cwd);
 }
 
 /** Policy globs are root-anchored; translate them to .gitattributes lines. */
@@ -364,7 +366,7 @@ const USAGE = `veil: per-user access control for git
   veil rekey               re-encrypt your readable files for the current policy
   veil audit <user>        list secrets <user> could ever read (rotate them after offboarding)
 
-internal (wired up by setup): clean %f | smudge %f | textconv <file>`;
+internal (wired up by setup): clean %f | smudge %f | textconv <file> | pre-commit`;
 
 export async function main(argv) {
   const [cmd, ...rest] = argv;
@@ -381,6 +383,7 @@ export async function main(argv) {
     clean: cmdClean,
     smudge: cmdSmudge,
     textconv: cmdTextconv,
+    'pre-commit': cmdPreCommit,
   };
   if (!table[cmd]) {
     console.error(USAGE);

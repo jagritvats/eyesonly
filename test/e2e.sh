@@ -82,7 +82,7 @@ expect_fail "junior can't stage an edit to .env (client refuses)" as junior bash
 as junior git checkout -q -- .env 2>/dev/null; as junior git reset -q --hard
 echo 'DB_PASS=leaked' > .env
 NOF="-c filter.veil.clean=cat -c filter.veil.smudge=cat"   # attacker disables the client filter
-as junior git $NOF add .env && as junior git $NOF commit -qm "pushed the .env too" >/dev/null
+as junior git $NOF add .env && as junior git $NOF commit -q --no-verify -m "pushed the .env too" >/dev/null
 expect_reject "plaintext .env push (filters bypassed) is rejected" "may not modify protected file '.env'" as junior git push -q
 git reset -q --hard origin/main
 # forge: a valid envelope signed by junior and encrypted to the whole team
@@ -95,11 +95,11 @@ const r = {}; for (const u of pol.files[".env"]) r[u] = pol.keys[u].x25519;
 r.junior = id.x25519.pub;
 fs.writeFileSync(".env", vc.seal({ plaintext: Buffer.from("API_URL=https://evil\n"), path: ".env", recipients: r, signer: id }));
 ' "$ROOT" "$SB/home/junior"
-as junior git add .env && as junior git commit -qm forge >/dev/null
+as junior git add .env && as junior git commit -q --no-verify -m forge >/dev/null
 expect_reject "forged envelope signed by junior is rejected" "may not modify" as junior git push -q
 git reset -q --hard origin/main
 OLD=$(git rev-list --max-parents=0 HEAD)
-git cat-file blob "$OLD:.env" > .env && as junior git add .env && as junior git commit -qm rollback >/dev/null
+git cat-file blob "$OLD:.env" > .env && as junior git add .env && as junior git commit -q --no-verify -m rollback >/dev/null
 expect_reject "rollback to an old, validly-signed .env is rejected" "may not modify" as junior git push -q
 git reset -q --hard origin/main
 as junior git rm -q .env && as junior git commit -qm delete >/dev/null
@@ -169,10 +169,10 @@ expect_ok "after pull-policy + rekey bob's push goes through" in_ "$SB/bob" as b
 
 echo "== renames"
 cd "$SB/alice" && as alice git pull -q --rebase >/dev/null 2>&1
-as alice git mv secrets/db.txt secrets/db2.txt && as alice git commit -qm rename
-expect_reject "renamed secret with a stale path binding is rejected" "encrypted for path" as alice git push -q
-as alice $VEIL rekey 2>/dev/null && as alice git commit -q --amend --no-edit >/dev/null
-expect_ok "after veil rekey the rename pushes" as alice git push -q
+as alice git mv secrets/db.txt secrets/db2.txt && as alice git commit -q --no-verify -m rename
+expect_reject "renamed secret with a stale path binding is rejected (hook bypassed)" "encrypted for path" as alice git push -q
+as alice git reset -q --soft HEAD~1 && as alice git commit -qm rename >/dev/null 2>&1
+expect_ok "with the pre-commit hook the rename pushes without veil rekey" as alice git push -q
 
 echo
 echo "$PASS passed, $FAIL failed"

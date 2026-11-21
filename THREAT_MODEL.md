@@ -49,6 +49,8 @@ convenient; the server enforces.
 | 22 | A5 rolls back to an older, validly signed policy (e.g. one that still includes a revoked user) | Manifests carry a version; clients refuse anything older than the last version they saw, and a same-version manifest with different content | ✅ (test/attest.sh) |
 | 23 | A5 downgrades to an unsigned policy | Once a repo was signed, the client refuses an unsigned policy: `repo was signed; server now serves an unsigned policy` | ✅ (test/attest.sh) |
 | 24 | A5 injects a recipient (or a signing key) into the unsigned part of the policy view | Clients encrypt only to, and accept envelope signatures only from, keys in the signed manifest; the server flags `attestation_stale` and the client warns | ✅ (test/attest.sh) |
+| 25 | A4 renames a protected file with `git mv` (stale path binding) | Pre-commit hook re-seals the envelope for the new path (refuses moves to unprotected paths); if the hook is bypassed the server still rejects the stale binding | ✅ (test/hooks.sh) |
+| 26 | A4/A1 stages plaintext or a stale-audience envelope | Pre-commit hook refuses plaintext and re-seals stale audiences before anything leaves the laptop (defense in depth; the server hook remains the boundary) | ✅ (test/hooks.sh) |
 
 ## Known limitations
 

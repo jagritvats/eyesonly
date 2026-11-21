@@ -48,6 +48,36 @@ just works: the pre-commit hook installed by `veil setup` re-seals it for its ne
 | `veil audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
 | `veil-server policy manifest app.git > m.json`, `veil policy-sign m.json > s.json`, `veil-server policy attest app.git s.json` | Admin signs the policy so a compromised server can't swap keys or add readers; clients pin the admin key on first contact (`VEIL_PIN_ADMIN=<fingerprint>` pins it up front) |
 
+## Mirroring to GitHub/GitLab
+
+Keep private branches and the secrets policy in Veil and still get PRs and CI on
+GitHub, GitLab or Gitea: `veil-server mirror` pushes **verified public refs only**.
+
+```bash
+install -m 600 /dev/stdin /etc/veil/gh-token <<<"$GITHUB_TOKEN"   # outside the repo dir
+veil-server mirror set app.git --url https://github.com/acme/app.git \
+  --push refs/heads/main 'refs/tags/v*' --credential-file /etc/veil/gh-token
+veil-server mirror push app.git        # run by hand or from cron; non-zero exit on any problem
+veil-server mirror show app.git        # config (credential path only) + what was mirrored
+```
+
+- Only allowlisted refs that are public under the *current* policy are pushed;
+  `refs/heads/private/*` never is, and `refs/*` is refused as too broad.
+- The push comes from a staging repo (`<repo>.git/veil-mirror-stage.git`) that only ever
+  fetched those refs, so private objects can't ride along as delta bases. Before
+  anything is pushed, every new commit is re-checked: protected files must be valid,
+  authorized envelopes and no history may come from a private branch. Any failure
+  pushes nothing.
+- Refspecs are explicit; there's no force unless `--allow-force` (and even then with a
+  lease, so upstream changes are never clobbered). `--delete-upstream on-private`
+  removes refs upstream when the policy makes them private. Either way, treat what was
+  already mirrored as disclosed.
+- URLs must be `https://`, `ssh://` or `git@host:path` (`ext::` and friends are always
+  refused; local paths need `--allow-local`). The token goes in an HTTP header via the
+  environment, never in argv or the URL.
+- **Required:** turn on upstream branch protection so only the mirror's credential can
+  push the mirrored branches. Veil can't police pushes made directly to GitHub/GitLab.
+
 ## How it works
 
 1. **Client filter** (`clean`/`smudge`): protected paths are sealed with AES-256-GCM.

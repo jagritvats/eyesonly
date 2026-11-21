@@ -501,6 +501,9 @@ const USAGE = `veil-server: auth proxy + policy enforcement for veil repos   (da
   veil-server policy set <name.git> <file|->   replace the policy (validated)
   veil-server policy manifest <name.git>       print the policy manifest for an admin to sign
   veil-server policy attest <name.git> <signed.json>   install an admin-signed manifest
+  veil-server mirror set <name.git> --url U --push <ref|glob>... [--allow-force] [--delete-upstream on-private] [--credential-file F] [--allow-local]
+  veil-server mirror show <name.git>           print the mirror config (credential path only)
+  veil-server mirror push <name.git>           push verified public refs to the upstream (fails closed)
   veil-server serve [--port 8787] [--host 127.0.0.1]`;
 
 export async function main([cmd, ...rest]) {
@@ -508,6 +511,7 @@ export async function main([cmd, ...rest]) {
   if (cmd === 'repo') return cmdRepo(rest);
   if (cmd === 'policy') return cmdPolicy(rest);
   if (cmd === 'serve') return cmdServe(rest);
+  if (cmd === 'mirror') return (await import('./mirror.mjs')).cmdMirror(rest);
   if (cmd === 'hook' && rest[0] === 'pre-receive') return hookPreReceive();
   console.error(USAGE);
   process.exit(cmd ? 1 : 0);

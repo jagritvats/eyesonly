@@ -10,6 +10,7 @@ Rendered with copy buttons at https://jagritvats.github.io/eyesonly/docs/.
 | [team-workflows.md](team-workflows.md) | Adding people, changing access, private branches, offboarding |
 | [ci.md](ci.md) | `eyesonly verify` as a required check; reading protected files in CI |
 | [server-deployment.md](server-deployment.md) | Running the server: TLS, systemd, Docker, backups, upgrades |
+| [admin-api.md](admin-api.md) | Managing the server from your machine: admin tokens, `eyesonly admin`, HTTP reference |
 | [policy-reference.md](policy-reference.md) | Every policy field and how matching works |
 | [troubleshooting.md](troubleshooting.md) | Error messages, causes and fixes |
 

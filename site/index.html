@@ -119,8 +119,8 @@
     <h1>Git, but not <em>all-or-nothing</em>.</h1>
     <p class="lede">Works on the GitHub repo you already have, with no server to run. Your <code>.env</code>
       lives next to the code, encrypted for the people who should read it, and everyone keeps using plain
-      <code>git</code>. When you need private branches and pushes rejected before they're stored, add the
-      Eyes Only server. Same commands.</p>
+      <code>git</code>. Private branches are sealed on the host. When they must be invisible and pushes rejected before
+      they're stored, add the Eyes Only server. Same commands.</p>
     <div class="cta">
       <a class="btn primary" href="#start">Start on GitHub in 2 minutes</a>
       <a class="btn" href="#modes">GitHub mode or server?</a>
@@ -191,7 +191,7 @@ a1f3…  refs/heads/main
         <tr><td>Signed policy, no rollback, no loosening on a branch</td><td class="yes">✓</td><td class="yes">✓</td></tr>
         <tr><td>Plaintext push from a laptop with the client</td><td class="yes">blocked</td><td class="yes">rejected</td></tr>
         <tr><td>Plaintext push from someone without the client</td><td class="nope">caught in CI, already on the host</td><td class="yes">rejected before it's stored</td></tr>
-        <tr><td>Private branches</td><td class="nope">not yet</td><td class="yes">invisible to non-members</td></tr>
+        <tr><td>Private branches</td><td class="yes">encrypted on the host</td><td class="yes">invisible to non-members</td></tr>
         <tr><td>Something to run</td><td class="yes">nothing</td><td class="nope">one small Node service</td></tr>
       </tbody>
     </table></div>
@@ -237,7 +237,7 @@ a1f3…  refs/heads/main
     <h2>What Eyes Only doesn't do</h2>
     <p class="sub">Security tools lose trust by over-claiming, so here are the limits. Details are in <code>THREAT_MODEL.md</code>.</p>
     <div class="limits">
-      <div><b>Revocation isn't retroactive</b><span>Someone who could read a secret has seen it. <code>eyesonly audit &lt;user&gt;</code> lists exactly what to rotate.</span></div>
+      <div><b>Revocation isn't retroactive</b><span>Someone who could read a secret has seen it. <code>eyesonly offboard &lt;user&gt;</code> re-encrypts and writes the rotation checklist.</span></div>
       <div><b>File names and timestamps are visible</b><span>Outsiders see that <code>.env</code> exists and when it changed, but not what's in it.</span></div>
       <div><b>GitHub mode detects, the server prevents</b><span>Without a server, a plaintext push from someone who skips the client is on the host until CI flags it. Rotate it.</span></div>
       <div><b>The server sees private branches</b><span>It never sees file plaintext, but private refs are ordinary objects on the server.</span></div>
@@ -254,7 +254,7 @@ a1f3…  refs/heads/main
         <tr><td>Per-file, per-person read access</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td><td class="yes">✓</td></tr>
         <tr><td>Plaintext pushes stopped</td><td class="yes">pre-push + CI</td><td class="yes">✓ on the server</td><td class="nope">no</td><td class="nope">n/a</td><td class="nope">n/a</td></tr>
         <tr><td>Forged or unauthorized secrets refused</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">n/a</td><td class="yes">✓</td></tr>
-        <tr><td>Private branches in the same repo</td><td class="nope">not yet</td><td class="yes">✓</td><td class="nope">no</td><td class="nope">no</td><td class="nope">no</td></tr>
+        <tr><td>Private branches in the same repo</td><td class="yes">sealed</td><td class="yes">✓ invisible</td><td class="nope">no</td><td class="nope">no</td><td class="nope">no</td></tr>
         <tr><td>Nothing extra to host</td><td class="yes">✓</td><td class="nope">no</td><td class="yes">✓</td><td class="yes">✓</td><td class="nope">no</td></tr>
       </tbody>
     </table></div>

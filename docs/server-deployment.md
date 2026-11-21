@@ -96,6 +96,9 @@ set it explicitly. Every admin command must use the same value as the running se
 ```
 $EYESONLY_DATA/
   users.json                         users, public keys, SHA-256 token hashes (mode 0600)
+  server.json                        server admins (mode 0600)
+  admin-tokens.json                  admin API tokens, SHA-256 hashes only (mode 0600)
+  audit.log                          append-only, hash-chained audit trail (mode 0600)
   repos/
     app.git/                         a normal bare repo
       eyesonly.json                  the policy (see policy-reference.md)
@@ -143,6 +146,10 @@ git.example.com {
 }
 ```
 
+Caddy sends `X-Forwarded-Proto` and `X-Forwarded-For`. Run the server with
+`EYESONLY_TRUST_PROXY=1` so the [admin API](admin-api.md) sees HTTPS and failed-login
+lockouts key on the real client address (see [Behind a proxy](#behind-a-proxy)).
+
 ## TLS with nginx
 
 Git pushes can be large and slow. Don't buffer them, and don't cap their size.
@@ -164,18 +171,35 @@ server {
         proxy_pass http://127.0.0.1:8787;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
 ```
 
 The server reads the `Authorization`, `Content-Type`, `Content-Length` and
-`Content-Encoding` headers, which nginx forwards by default. It doesn't read
-`X-Forwarded-*`.
+`Content-Encoding` headers, which nginx forwards by default. It reads `X-Forwarded-Proto`
+and `X-Forwarded-For` only with `EYESONLY_TRUST_PROXY=1`.
+
+### Behind a proxy
+
+With `EYESONLY_TRUST_PROXY=1` the server takes the client address from the last
+`X-Forwarded-For` entry (the one your proxy appended) and decides whether admin requests
+came over HTTPS from `X-Forwarded-Proto`. Set it only when the proxy is the sole way to
+reach the server (bind to 127.0.0.1, or don't publish the port, as the compose kit does).
+Otherwise anyone who reaches the server directly can claim any address and `https`.
 
 ### Rate limiting
 
-The server has no rate limiting or request timeouts of its own. Tokens are 192-bit random
-values, so guessing isn't practical, but limiting requests per IP at the proxy is cheap:
+Failed logins already back off inside the server, for git and the admin API: after 5
+failures from one address for one user name, that pair is locked out for 1 s, doubling per
+further failure up to 15 minutes (HTTP 429 with `Retry-After`); 20 failures from one address
+across names lock that address out. A success clears it, and the state resets on restart.
+Behind a NAT, many people share an address, so raise the limits if they trip each other up
+(variables below). Tokens are 192-bit random values, so guessing isn't practical either way.
+
+The server has no general request rate limit or request timeouts. Limiting requests per IP
+at the proxy is cheap:
 
 ```nginx
 # in http { }
@@ -227,10 +251,46 @@ sudo -u eyesonly EYESONLY_DATA=/srv/eyesonly eyesonly-server repo list
 | `EYESONLY_DATA` | server, admin CLI, mirror | Data directory. Default `./eyesonly-data` |
 | `PORT` | `serve` | Port when `--port` isn't given. Default 8787 |
 | `EYESONLY_MAX_UPLOAD_PACK_BODY` | `serve` | Cap on a fetch negotiation request, in bytes (default 10 MiB). Larger requests get HTTP 413. Pushes aren't capped |
+| `EYESONLY_TRUST_PROXY` | `serve` | `1`: trust `X-Forwarded-For` / `X-Forwarded-Proto` from your proxy ([Behind a proxy](#behind-a-proxy)) |
+| `EYESONLY_AUTH_MAX_FAILURES` | `serve` | Failed logins per address and user before lockout. Default 5 (an address alone: 4x this) |
+| `EYESONLY_AUTH_LOCKOUT_MS` | `serve` | First lockout, doubling per further failure. Default 1000 |
+| `EYESONLY_AUTH_LOCKOUT_MAX_MS` | `serve` | Longest lockout. Default 900000 (15 minutes) |
+| `EYESONLY_MAX_ADMIN_BODY` | `serve` | Cap on admin API request bodies, in bytes. Default 1 MiB |
+| `EYESONLY_ALLOW_INSECURE_ADMIN` | `serve` | `1`: allow the admin API over plain HTTP from anywhere. For tests only |
 | `EYESONLY_ALLOW_PROTOCOL_V2` | `serve` | Set to `1` to pass the client's `Git-Protocol` header through. **Don't.** Protocol v2 lets a client fetch hidden objects by SHA, which breaks private branches. It exists for tests |
 | `HOME`, `PATH` | `serve`, mirror | Passed to `git http-backend` and the mirror's git. `git` must be on `PATH` |
 
 `EYESONLY_USER` is set by the server for the pre-receive hook. Don't set it yourself.
+
+## Admin API
+
+Manage users, repos and policies from your own machine with `eyesonly admin` instead of a
+shell here. Create a token on the server with `eyesonly-server admin-token create <you>`;
+details in [admin-api.md](admin-api.md). Server admins (`init` makes its admin one;
+`eyesonly-server server-admin add|remove|list`) can do everything, repo admins manage their
+repos' policies.
+
+## Audit log
+
+The server appends one JSON line per event to `$EYESONLY_DATA/audit.log` (mode 0600): pushes
+(user, repo, each ref's old and new commit, accepted or rejected with the reason), failed
+logins and lockouts, policy fetches, admin actions from the CLI and the API (who, what, and
+SHA-256 hashes of the policy before and after) and installed signatures. It never contains
+tokens, private keys or file contents.
+
+```bash
+eyesonly-server audit-log                          # everything, one line per event
+eyesonly-server audit-log --repo app.git --type push --since 2026-11-01
+eyesonly-server audit-log --user bob --json        # raw JSON lines
+eyesonly-server audit-log --verify                 # ok: 1234 line(s), chain intact. Head: 9f2c...
+```
+
+Each line carries the SHA-256 of the line before it, so `--verify` finds a line that was
+edited, removed or inserted, and says where. It can't notice the newest lines being cut off
+or the very last line being rewritten: keep the head hash `--verify` prints somewhere else
+(a ticket, a chat message) if you need that, or ship the log to a log store as it grows.
+The log is never rotated by the server; rotate it with your usual tools and keep the old
+files (`--verify` then checks the current file from its first line).
 
 ## Backups
 
@@ -243,6 +303,9 @@ you copy, avoids catching a push halfway through.
   are stored as ciphertext in the repos.
 - If you lose `users.json`, re-add each user from their public card (`user add`). The same
   card means the same keys, so existing ciphertext stays readable. Everyone gets a new token.
+- `admin-tokens.json` holds SHA-256 hashes of admin tokens, like `users.json` for git
+  tokens. `server.json` lists the server admins. `audit.log` is the audit trail; back it up
+  with everything else.
 - The mirror credential file lives outside the data dir (see the README). Back it up
   separately, or reissue it.
 
@@ -285,6 +348,7 @@ The Docker image runs this check on its own.
 
 ## Next
 
+- [admin-api.md](admin-api.md): managing the server from your machine
 - [policy-reference.md](policy-reference.md): who can read, write and see what
 - [team-workflows.md](team-workflows.md): adding people, offboarding, private branches
 - [ci.md](ci.md): giving CI access to secrets

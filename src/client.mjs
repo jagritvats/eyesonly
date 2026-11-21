@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { fileRule, writersOf } from './policy.mjs';
 import { installPreCommitHook, cmdPreCommit, HOOK_MARK } from './hooks.mjs';
+import * as ident from './identity.mjs';
 import { eyesonlyHome, identityPath, identitySource, readIdentity } from './identity.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
@@ -90,22 +91,64 @@ export function loadIdentity({ required = true } = {}) {
   } catch (e) {
     die(e.message);
   }
-  if (!id && required) die(`no identity at ${identityPath()}. Run: eyesonly keygen <your-name> (or set EYESONLY_IDENTITY)`);
+  if (!id && required) die(`no identity at ${identitySource()}. Run: eyesonly keygen <your-name> (or set EYESONLY_IDENTITY)`);
   return id;
 }
 
-function cmdKeygen([name]) {
-  if (!name) die('usage: eyesonly keygen <name>');
+function cmdKeygen(args) {
+  const { flags, rest } = takeFlags(args, ['store']);
+  const [name] = rest;
+  if (!name) die('usage: eyesonly keygen <name> [--store file|keychain]');
   if (!/^[a-z0-9][a-z0-9._-]{0,38}$/i.test(name)) die(`invalid name '${name}': use letters, digits, '.', '_' or '-' (max 39 characters), starting with a letter or digit`);
-  const p = identityPath();
-  if (fs.existsSync(p)) die(`identity already exists at ${p} (refusing to overwrite)`);
-  fs.mkdirSync(EYESONLY_HOME(), { recursive: true, mode: 0o700 });
+  const store = flags.store ?? 'file';
+  if (!['file', 'keychain'].includes(store)) die(`--store must be 'file' or 'keychain', not '${store}'`);
+  const existing = ident.existingIdentity();
+  if (existing) die(`identity already exists at ${existing} (refusing to overwrite)`);
   const id = vc.generateIdentity(name);
-  fs.writeFileSync(p, JSON.stringify(id, null, 2), { mode: 0o600 });
+  let where;
+  try {
+    where = ident.saveIdentity(id, store);
+  } catch (e) {
+    die(e.message);
+  }
   const card = vc.publicCard(id);
-  log(`created identity '${name}' (fingerprint ${vc.fingerprint(card)}) at ${p}`);
+  log(`created identity '${name}' (fingerprint ${vc.fingerprint(card)}) at ${where}`);
+  if (store === 'file') log('tip: `eyesonly identity move --to keychain` keeps it in your OS keychain instead of a file');
   log('send this public card to your server admin:');
   console.log(vc.encodeCard(card));
+}
+
+function cmdIdentity([sub, ...args]) {
+  if (sub === 'show') {
+    const id = loadIdentity({ required: false });
+    const env = !!process.env.EYESONLY_IDENTITY?.trim();
+    console.log(`store:       ${env ? 'EYESONLY_IDENTITY (environment)' : ident.configuredStore()}`);
+    console.log(`at:          ${identitySource()}`);
+    if (!id) return console.log('identity:    none. Run: eyesonly keygen <your-name>');
+    console.log(`name:        ${id.name}`);
+    console.log(`fingerprint: ${vc.fingerprint(vc.publicCard(id))}`);
+    return;
+  }
+  if (sub === 'move') {
+    const { flags } = takeFlags(args, ['to']);
+    if (!['file', 'keychain'].includes(flags.to)) die('usage: eyesonly identity move --to keychain|file');
+    let r;
+    try {
+      r = ident.moveIdentity(flags.to);
+    } catch (e) {
+      die(e.message);
+    }
+    if (!r.moved) return log(`identity '${r.id.name}' is already there: ${r.where}`);
+    return log(`moved identity '${r.id.name}' from the ${r.from} store to ${r.where} (read back and checked; the old copy is removed)`);
+  }
+  if (sub === 'export') {
+    if (!args.includes('--yes')) die('`eyesonly identity export` prints your private keys. Re-run with --yes to confirm (e.g. to paste into a CI secret)');
+    const id = loadIdentity();
+    log('warning: this is your private identity. Keep it only in a secret store (a CI secret), never in a repo or chat.');
+    console.log(ident.exportIdentity(id));
+    return;
+  }
+  die('usage: eyesonly identity show | move --to keychain|file | export --yes');
 }
 
 function cmdWhoami() {
@@ -414,7 +457,7 @@ async function cmdSetup(args = []) {
   log(`ready (remote '${remote.name}'). ${files.length} protected file(s) in this checkout.`);
 }
 
-async function cmdPullPolicy(args = []) {
+export async function cmdPullPolicy(args = []) {
   const { flags } = takeFlags(args, ['remote', 'mode']);
   const top = repoTop();
   const rm = await repoMode();
@@ -461,9 +504,11 @@ function storeToken(url) {
 
 /**
  * GitHub mode -> server, run by an admin after `eyesonly-server import` and a policy
- * signature by an admin members already pinned. Pushes every branch (also those only on the
- * old host), tag and refs/eyesonly/*, then switches this clone to server mode. The pinned
- * admin keys carry over, so nobody deletes trust.json.
+ * signature by an admin members already pinned. Unseals the sealed private branches this
+ * admin can read (on the server they're real branches the server hides, so the sealed
+ * refs/eyesonly/b/* copies aren't pushed), pushes every branch (also those only on the old
+ * host) and tag, then switches this clone to server mode. The pinned admin keys carry over,
+ * so nobody deletes trust.json.
  */
 async function cmdMigrate(args) {
   const { flags } = takeFlags(args, ['to', 'remote']);
@@ -495,14 +540,20 @@ async function cmdMigrate(args) {
   } else git(['remote', 'add', name, storeToken(url)], { cwd: top });
   if (tryGit(['config', `remote.${old}.url`])) spawnSync('git', ['fetch', '--quiet', old], { cwd: top, stdio: ['ignore', 'ignore', 'inherit'] });
   const list = (prefix) => (tryGit(['for-each-ref', '--format=%(refname)', prefix]) || '').toString().split('\n').map((s) => s.trim()).filter(Boolean);
+  // Sealed private branches you can read become local branches (verified like `branch pull`).
+  const lsRemote = tryGit(['ls-remote', old, 'refs/eyesonly/b/*']);
+  const sealedOnHost = (lsRemote || '').toString().split('\n').filter((l) => l.trim()).length;
+  if (sealedOnHost) {
+    log(`unsealing the private branches you can read (eyesonly branch pull --all)...`);
+    spawnSync(process.execPath, [CLI, 'branch', 'pull', '--all'], { cwd: top, stdio: ['ignore', 'inherit', 'inherit'] });
+  }
   const heads = new Set(list('refs/heads/').map((r) => r.slice('refs/heads/'.length)));
   const specs = ['refs/heads/*:refs/heads/*', 'refs/tags/*:refs/tags/*'];
-  if (list('refs/eyesonly/').length) specs.push('refs/eyesonly/*:refs/eyesonly/*');
   for (const r of list(`refs/remotes/${old}/`)) {
     const b = r.slice(`refs/remotes/${old}/`.length);
     if (b !== 'HEAD' && !heads.has(b)) specs.push(`${r}:refs/heads/${b}`);
   }
-  log(`pushing ${heads.size} local branch(es), ${specs.length - 2 - (specs.includes('refs/eyesonly/*:refs/eyesonly/*') ? 1 : 0)} branch(es) only on '${old}', tags${specs.includes('refs/eyesonly/*:refs/eyesonly/*') ? ' and refs/eyesonly/*' : ''} to '${name}'...`);
+  log(`pushing ${heads.size} local branch(es), ${specs.length - 2} branch(es) only on '${old}' and tags to '${name}'...`);
   const r = spawnSync('git', ['push', '--no-verify', name, ...specs], { cwd: top, stdio: ['ignore', 'inherit', 'inherit'] });
   if (r.status !== 0) die(`the server refused part of the push (see above). Nothing was switched; fix it and run eyesonly migrate again. History with plaintext secrets: docs/existing-repos.md`);
   await cmdSetup(['--remote', name, '--mode', 'server']);
@@ -511,6 +562,9 @@ async function cmdMigrate(args) {
   log('teammates, in their clones (each with their own token):');
   log(`  git remote add ${name} ${bare.replace('//', '//<name>:<token>@')}`);
   log(`  git fetch ${name} && eyesonly setup --remote ${name} --mode server`);
+  if (sealedOnHost) {
+    log(`sealed private branches you couldn't read stay sealed on '${old}'. Their writers, before switching: eyesonly branch pull <branch>; after: git push ${name} <branch> (the server hides it from everyone else).`);
+  }
   log(`then make the old host read-only or mirror to it (eyesonly-server mirror), so nobody keeps pushing there.`);
 }
 
@@ -726,9 +780,14 @@ async function cmdStatus() {
   for (const r of attrs.checkResolvedFilters(protectedFiles(policy, top), top)) {
     console.log(`warning: '${r.path}' resolves to filter=${r.value}; eyesonly requires filter=eyesonly`);
   }
+  if (policy.mode === 'repo') {
+    const lines = (await import('./branches.mjs')).branchSummary(top, policy);
+    if (lines.length) console.log('private branches (sealed, see eyesonly branch list):');
+    for (const l of lines) console.log(`  ${l}`);
+  }
 }
 
-function cmdRekey() {
+export function cmdRekey() {
   const policy = loadPolicy();
   const id = loadIdentity();
   const top = gitStr(['rev-parse', '--show-toplevel']);
@@ -741,32 +800,6 @@ function cmdRekey() {
   if (!files.length) return log('nothing to rekey');
   git(['add', '--renormalize', '--', ...files], { cwd: top, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, EYESONLY_RESEAL: '1' } });
   log(`re-encrypted ${files.length} file(s) for the current policy. Review with \`git status\` and commit.`);
-}
-
-function cmdAudit([user]) {
-  if (!user) die('usage: eyesonly audit <user>');
-  const policy = loadPolicy();
-  const seen = new Set();
-  const exposed = new Map();
-  for (const commit of gitStr(['rev-list', '--all']).split('\n').filter(Boolean)) {
-    for (const entry of gitStr(['ls-tree', '-r', '-z', commit]).split('\0').filter(Boolean)) {
-      const [meta, file] = entry.split('\t');
-      const oid = meta.split(' ')[2];
-      if (seen.has(oid) || !fileRule(policy, file)) continue;
-      seen.add(oid);
-      const blob = git(['cat-file', 'blob', oid]);
-      if (!vc.isEnvelope(blob)) {
-        exposed.set(file, (exposed.get(file) || 0) + 1);
-        continue;
-      }
-      try {
-        if (vc.parse(blob).keys[user]) exposed.set(file, (exposed.get(file) || 0) + 1);
-      } catch {}
-    }
-  }
-  if (!exposed.size) return console.log(`${user} never had access to any protected file in this history.`);
-  console.log(`${user} could decrypt these protected files at some point. Rotate the secrets inside them:`);
-  for (const [f, n] of exposed) console.log(`  ${f}  (${n} version${n > 1 ? 's' : ''})`);
 }
 
 // ------------------------------------------------------------------ doctor
@@ -803,9 +836,12 @@ async function cmdDoctor(args = []) {
   // identity
   const idr = await attempt(() => loadIdentity({ required: false }));
   const id = idr.value;
-  if (idr.error) fail(idr.error, `restore ${identityPath()} from a backup, or run eyesonly keygen and ask your admin to re-register you`);
-  else if (!id) fail(`no identity at ${identityPath()}`, 'eyesonly keygen <your-name>, then send the card to your admin (or set EYESONLY_HOME)');
-  else ok(`identity '${id.name}' at ${identityPath()}`);
+  if (idr.error) fail(idr.error, `restore ${identitySource()} from a backup, or run eyesonly keygen and ask your admin to re-register you`);
+  else if (!id) fail(`no identity at ${identitySource()}`, 'eyesonly keygen <your-name>, then send the card to your admin (or set EYESONLY_HOME)');
+  else ok(`identity '${id.name}' in ${identitySource()}`);
+  if (id && !process.env.EYESONLY_IDENTITY?.trim() && ident.configuredStore() === 'file') {
+    warn(`your private key is a plain file (${identityPath()})`, 'eyesonly identity move --to keychain');
+  }
 
   let top;
   try {
@@ -823,7 +859,11 @@ async function cmdDoctor(args = []) {
   // remote and credentials (repo mode: the signed policy in the repo instead)
   const rr = isRepoMode ? {} : await attempt(() => resolveRemote(top, flags.remote));
   const remote = rr.value;
-  if (isRepoMode) await (await repoMode()).doctorRepo(top, { ok, warn, fail, id, remote: remoteHint(top, flags.remote).name });
+  if (isRepoMode) {
+    await (await repoMode()).doctorRepo(top, { ok, warn, fail, id, remote: remoteHint(top, flags.remote).name });
+    const pol = loadPolicy({ required: false });
+    if (pol) for (const l of (await import('./branches.mjs')).branchSummary(top, pol)) (/not pushed|never sealed|diverged/.test(l) ? warn : ok)(`private branch ${l}`);
+  }
   else if (rr.error) fail(rr.error.split('\n')[0], 'git remote add origin https://<you>@<server>/<repo>.git, or eyesonly setup --remote <name>');
   else {
     ok(`remote '${remote.name}' -> ${redact(remote.url)}`);
@@ -941,7 +981,10 @@ function cmdDemo() {
 const USAGE = `eyesonly: per-user access control for git
 
   eyesonly demo                run a self-contained local demo (temp dir, two users)
-  eyesonly keygen <name>       create your identity (~/.eyesonly/identity.json)
+  eyesonly keygen <name> [--store file|keychain]
+                               create your identity (file: ~/.eyesonly/identity.json)
+  eyesonly identity show | move --to keychain|file | export --yes
+                               where your identity lives; move it; print it for a CI secret
   eyesonly whoami              print your public card
   eyesonly clone <url> [dir]   clone an eyesonly repo and decrypt what you're allowed to read
   eyesonly setup [--remote <r>] [--mode repo|server]
@@ -950,9 +993,18 @@ const USAGE = `eyesonly: per-user access control for git
                                refresh the cached policy (server, or the repo's default branch)
   eyesonly doctor              check this machine and clone, and say how to fix problems
   eyesonly policy-sign <file>  (admin) sign a policy manifest from eyesonly-server policy manifest
+  eyesonly admin --server <url> <command>
+                               (admin) manage users, repos and policies over the server's admin API
   eyesonly status              list protected files and whether you can read them
   eyesonly rekey               re-encrypt your readable files for the current policy
-  eyesonly audit <user>        list secrets <user> could ever read (rotate them after offboarding)
+  eyesonly audit <user> [--since <date>] [--until <date>] [--json]
+                               every protected file version <user> could decrypt (rotate these)
+  eyesonly audit --file <path> [--at <date|rev>] [--all-refs] [--json]
+                               who could read <path> at that moment, from git history
+  eyesonly offboard <user> [--yes] [--checklist <out.md>]
+                               (admin) remove <user>, re-encrypt, write a rotation checklist
+  eyesonly rotate <file> KEY=value... | --from-stdin
+                               set dotenv keys in a protected file and stage it encrypted
   eyesonly run [--file <path>]... [--no-override] [--] <cmd> [args...]
                                run <cmd> with your protected .env files loaded into its environment
   eyesonly env [--file <path>]... [--format dotenv|json|shell]
@@ -969,10 +1021,13 @@ repo mode (no server; the signed policy lives in .eyesonly/policy.json):
   eyesonly policy show         rules, writers, members, admins and pinned fingerprints (both modes)
   eyesonly migrate --to <server-url> [--remote eyesonly]
                                (admin) move this repo onto an Eyes Only server; pins carry over
-  eyesonly verify [<base> [<head>]] | --range <a>..<b> [--require-signed]
+  eyesonly verify [<base> [<head>]] | --range <a>..<b> [--ref <ref>] [--sealed [<remote>]] [--require-signed]
                                check commits like the server would (CI and the pre-push hook)
+  eyesonly branch push [<branch>] | pull [<branch>|--all] | list | publish <branch> [--onto <b>] | delete <branch>
+                               private branches (policy prefix, e.g. private/*) sealed on the host
 
-identity: EYESONLY_IDENTITY (JSON or base64 of it), else $EYESONLY_HOME/identity.json
+identity: EYESONLY_IDENTITY (JSON or base64 of it), else the store named in
+          $EYESONLY_HOME/config.json: the OS keychain, or $EYESONLY_HOME/identity.json
 
 internal (wired up by setup): filter-process | clean %f | smudge %f | textconv <file> | pre-commit | pre-push | merge-file`;
 
@@ -986,6 +1041,7 @@ export async function main(argv) {
     demo: cmdDemo,
     keygen: cmdKeygen,
     whoami: cmdWhoami,
+    identity: cmdIdentity,
     clone: cmdClone,
     setup: cmdSetup,
     'pull-policy': cmdPullPolicy,
@@ -993,7 +1049,9 @@ export async function main(argv) {
     'policy-sign': (a) => attest.cmdPolicySign(a),
     status: cmdStatus,
     rekey: cmdRekey,
-    audit: cmdAudit,
+    audit: (a) => import('./audit.mjs').then((m) => m.cmdAudit(a)),
+    offboard: (a) => import('./audit.mjs').then((m) => m.cmdOffboard(a)),
+    rotate: (a) => import('./audit.mjs').then((m) => m.cmdRotate(a)),
     clean: cmdClean,
     smudge: cmdSmudge,
     textconv: cmdTextconv,
@@ -1007,9 +1065,11 @@ export async function main(argv) {
     revoke: (a) => repoMode().then((m) => m.cmdRevoke(a)),
     policy: (a) => repoMode().then((m) => m.cmdPolicy(a)),
     verify: (a) => import('./verify.mjs').then((m) => m.cmdVerify(a)),
+    branch: (a) => import('./branches.mjs').then((m) => m.cmdBranch(a)),
     'pre-push': (a) => import('./verify.mjs').then((m) => m.cmdPrePush(a)),
     'filter-process': cmdFilterProcess,
     doctor: cmdDoctor,
+    admin: (a) => import('./admin-client.mjs').then((m) => m.cmdAdmin(a)),
     '__cli-path': () => console.log(realOrSelf(CLI)),
   };
   if (!table[cmd]) {

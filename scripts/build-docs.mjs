@@ -29,7 +29,7 @@ const OUT = path.resolve(args[0] || path.join(ROOT, '_site'));
 // Guide order and grouping on the index. Guides not listed here go under "More guides".
 const GROUPS = [
   { title: 'Get started', slugs: ['github-mode', 'existing-repos', 'choosing-a-mode'] },
-  { title: 'Run it', slugs: ['ci', 'server-deployment'] },
+  { title: 'Run it', slugs: ['ci', 'server-deployment', 'admin-api'] },
   { title: 'Day to day', slugs: ['team-workflows', 'policy-reference'] },
   { title: 'When something breaks', slugs: ['troubleshooting'] },
 ];
@@ -54,10 +54,13 @@ const SCENARIOS = [
   { label: 'Work on a private branch', in: 'team-workflows', match: /private branch/i },
   { label: 'Offboard someone', in: 'team-workflows', match: /offboard/i },
   { label: 'Rotate a secret', in: 'team-workflows', match: /rotate a secret/i },
+  { label: 'Who could read a secret on a date', in: 'team-workflows', match: /who could read a secret/i },
   { label: 'Lost a private key', in: 'team-workflows', match: /lost.*key/i },
   { label: 'Read secrets in CI', in: 'ci', match: /read secrets in ci|create a ci identity/i },
   { label: 'Run the server behind TLS', in: 'server-deployment', match: /tls|caddy|nginx/i },
   { label: 'Back up the server', in: 'server-deployment', match: /backup|back up/i },
+  { label: 'Manage the server from your laptop', in: 'admin-api', match: /get an admin token/i },
+  { label: 'See who pushed or changed what', in: 'server-deployment', match: /^audit log$/i },
   { label: 'Mirror to GitHub (server)', in: null, match: /^mirror(ing)? to|set up (the )?mirror/i, url: `${REPO}#mirroring-to-githubgitlab-server` },
   { label: 'Write a policy', in: 'policy-reference', match: /^example$|write a policy/i },
   { label: 'Sign the policy', in: 'policy-reference', match: /sign and install|signed polic/i },

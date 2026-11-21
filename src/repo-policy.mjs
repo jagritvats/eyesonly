@@ -2,14 +2,18 @@
 //
 //   .eyesonly/policy.json = attestation { manifest, signer, signer_ed25519, sig }
 //   manifest = { v: 1, kind: 'repo', repo: <random id>, version,
-//                policy: { members, admins, groups, files, writers? }, // the rules as written
+//                policy: { members, admins, groups, files, branches, writers? }, // the rules as written
 //                files: [[glob, [users]], ...],                  // expanded audiences, rule order
+//                branches: [[prefix, [users]], ...],             // expanded, sorted by prefix
 //                keys: { user: { x25519, ed25519, ssh_signing? } } } // every member's public keys
 //
-// `writers` (optional, default: members) narrows who may sign protected files, exactly like
-// the server's `writers`: a writer of a path is in its audience AND a writer; admins always
-// write. `ssh_signing` is an optional SSH public key used by `eyesonly verify --require-signed`
-// to attribute commits.
+// `writers` (optional, default: members) narrows who may sign protected files and seal private
+// branches, exactly like the server's `writers`: a writer of a path or branch is in its audience
+// AND a writer; admins always write. `ssh_signing` is an optional SSH public key used by
+// `eyesonly verify --require-signed` to attribute commits.
+//
+// `branches` (private branches, sealed under refs/eyesonly/, see branches.mjs) is optional:
+// policies written before 0.5 have none, and older clients ignore it.
 //
 // It is the server flow's signed manifest (src/attest.mjs) plus the raw rules, so admins can
 // edit groups and `eyesonly verify` can apply the same checks as the server's hook. The repo id
@@ -86,9 +90,21 @@ function expandFiles(policy, keys) {
   return Object.entries(policy.files || {}).map(([glob, who]) => [glob, [...expand(policy, who, all)].sort()]);
 }
 
-/** Everyone who may sign protected files: writers (default members) plus admins. */
+/** Everyone who may sign protected files or seal branches: writers (default members) plus admins. */
 export function effectiveWriters(rules, all) {
   return new Set([...expand(rules, rules.writers ?? rules.members, all), ...expand(rules, rules.admins || [], all)]);
+}
+
+/** Expanded branch audiences, sorted by prefix (branch rules are longest-prefix, so order doesn't matter). */
+function expandBranches(policy, keys) {
+  const all = Object.keys(keys);
+  return Object.keys(policy.branches || {}).sort().map((prefix) => [prefix, [...expand(policy, policy.branches[prefix], all)].sort()]);
+}
+
+/** A branch rule prefix: a full ref under refs/heads/. `private/` is accepted as `refs/heads/private/`. */
+export function branchPrefix(s) {
+  const p = s.startsWith('refs/') ? s : `refs/heads/${s}`;
+  return /^refs\/heads\/[A-Za-z0-9._\/-]+$/.test(p) && !p.includes('..') ? p : null;
 }
 
 export function buildRepoManifest({ repo, version, policy, keys }) {
@@ -97,9 +113,10 @@ export function buildRepoManifest({ repo, version, policy, keys }) {
     admins: policy.admins || [],
     groups: policy.groups || {},
     files: policy.files || {},
+    branches: policy.branches || {},
     ...(policy.writers !== undefined ? { writers: policy.writers } : {}),
   };
-  return { v: 1, kind: 'repo', repo, version, policy: rules, files: expandFiles(rules, keys), keys };
+  return { v: 1, kind: 'repo', repo, version, policy: rules, files: expandFiles(rules, keys), branches: expandBranches(rules, keys), keys };
 }
 
 /** Structure and self-consistency checks on a repo manifest (the signature is checked separately). */
@@ -112,6 +129,13 @@ export function validRepoManifest(m) {
   if (p.writers !== undefined && !names(p.writers)) return false;
   if (!Object.values(m.keys).every((k) => k.ssh_signing === undefined || typeof k.ssh_signing === 'string')) return false;
   if (!p.admins.every((a) => Object.hasOwn(m.keys, a))) return false;
+  // Branch rules (0.5+): both the raw rules and the expanded audiences, or neither.
+  if ((p.branches === undefined) !== (m.branches === undefined)) return false;
+  if (p.branches !== undefined) {
+    if (!p.branches || typeof p.branches !== 'object' || Array.isArray(p.branches) || !Object.values(p.branches).every(names)) return false;
+    if (!Object.keys(p.branches).every((k) => branchPrefix(k) === k)) return false;
+    if (attest.canonical(expandBranches(p, m.keys)) !== attest.canonical(m.branches)) return false;
+  }
   // The expanded audiences must be what the rules say, in the same order.
   const globs = m.files.map(([g]) => g);
   if (globs.length !== Object.keys(p.files).length || !globs.every((g) => Object.hasOwn(p.files, g))) return false;
@@ -127,7 +151,7 @@ export function rulesOf(m) {
 /** The .git/eyesonly/policy.json cache the filters read. */
 export function cachePolicy(m, user) {
   const writers = [...effectiveWriters(rulesOf(m), Object.keys(m.keys))].sort();
-  return { ...attest.manifestToPolicy(m, user), mode: 'repo', version: m.version, writers };
+  return { ...attest.manifestToPolicy(m, user), branches: Object.fromEntries(m.branches || []), mode: 'repo', version: m.version, writers };
 }
 
 const fingerprints = (m, who) => Object.fromEntries(who.map((a) => [a, attest.adminFingerprint(m.keys[a].ed25519)]));

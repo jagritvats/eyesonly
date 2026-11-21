@@ -24,6 +24,7 @@ import { execFileSync } from 'node:child_process';
 import * as attest from './attest.mjs';
 import * as rp from './repo-policy.mjs';
 import { contentChecker, gitRunner } from './validate.mjs';
+import { refRule } from './policy.mjs';
 
 const ZERO = /^0{40}$|^0{64}$/;
 const log = (msg) => console.error('[eyesonly] ' + msg);
@@ -220,14 +221,32 @@ function run(fn) {
   }
 }
 
-/** eyesonly verify [<base> [<head>]] | --range <base>..<head> */
-export function cmdVerify(args) {
+/** A pushed ref that names a private branch under the policy at `rev` (CI: the base). */
+function privateRefError(ref, rev, cwd = process.cwd()) {
+  const text = rp.policyTextAt(rev, cwd);
+  if (!text) return null;
+  let m;
+  try {
+    m = JSON.parse(text).manifest;
+  } catch {
+    return null;
+  }
+  const rule = refRule({ branches: Object.fromEntries(m?.branches || []) }, ref);
+  return rule ? `'${ref.replace(/^refs\/heads\//, '')}' is a private branch (${rule.prefix.replace(/^refs\/heads\//, '')}*) pushed to the host in plaintext. Delete it there, treat its contents as disclosed, and use eyesonly branch push.` : null;
+}
+
+/** eyesonly verify [<base> [<head>]] | --range <base>..<head> [--ref <ref>] [--sealed [<remote>]] */
+export async function cmdVerify(args) {
   let base = null;
   let head = 'HEAD';
+  let ref = null;
+  let sealed = null;
   let requireSigned = false;
   const rest = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--require-signed') requireSigned = true;
+    else if (args[i] === '--ref') ref = args[++i] || null;
+    else if (args[i] === '--sealed') sealed = args[i + 1] && !args[i + 1].startsWith('-') ? args[++i] : '';
     else if (args[i] === '--range') {
       const r = args[++i] || '';
       const m = /^(.*?)\.\.(.+)$/.exec(r);
@@ -247,11 +266,27 @@ export function cmdVerify(args) {
   }
   const what = base ? `${base.replace(/^refs\/(remotes\/|heads\/)/, '')}..${head}` : `the history of ${head}`;
   const r = run(() => verifyRange({ base, head, requireSigned }));
-  process.exit(report(r, { what, requireSigned }) ? 0 : 1);
+  let ok = report(r, { what, requireSigned });
+  if (ref) {
+    const full = ref.startsWith('refs/') ? ref : `refs/heads/${ref}`;
+    const err = privateRefError(full, base || rp.defaultRef(process.cwd()));
+    if (err) {
+      console.error(`[eyesonly] REJECTED: ${err}`);
+      ok = false;
+    }
+  }
+  if (sealed !== null) {
+    const { verifySealedRefs } = await import('./branches.mjs');
+    const s = run(() => verifySealedRefs(process.cwd(), sealed || null));
+    for (const e of s.errors) console.error(`[eyesonly] REJECTED: ${e}`);
+    if (s.errors.length) ok = false;
+    else log(`checked ${s.checked} sealed branch ref(s): each is one encrypted envelope bound to its ref`);
+  }
+  process.exit(ok ? 0 : 1);
 }
 
 /** The pre-push hook: verify each pushed ref's new commits. stdin: <lref> <loid> <rref> <roid> lines. */
-export function cmdPrePush() {
+export async function cmdPrePush() {
   if (tryGit(['config', '--local', 'eyesonly.mode']) !== 'repo') return;
   let input = '';
   try {
@@ -259,10 +294,15 @@ export function cmdPrePush() {
   } catch {
     input = '';
   }
-  let ok = true;
-  for (const line of input.split('\n').filter(Boolean)) {
-    const [lref, loid, , roid] = line.split(' ');
+  const lines = input.split('\n').filter(Boolean);
+  const { prePushChecks } = await import('./branches.mjs');
+  const guard = run(() => prePushChecks(process.cwd(), lines));
+  for (const e of guard) console.error(`[eyesonly] REJECTED: ${e}`);
+  let ok = !guard.length;
+  for (const line of lines) {
+    const [lref, loid, rref, roid] = line.split(' ');
     if (!loid || ZERO.test(loid)) continue; // deleting a ref
+    if (rref?.startsWith('refs/eyesonly/')) continue; // sealed branches: shape-checked above
     const known = roid && !ZERO.test(roid) && commitOf(roid) ? roid : null;
     // Commits already on any remote-tracking branch were pushed (and checked) before.
     const base = known || rp.defaultRef(process.cwd());

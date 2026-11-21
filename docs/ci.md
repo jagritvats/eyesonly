@@ -61,7 +61,8 @@ git add .eyesonly .gitattributes && git commit -m "eyesonly: ci-bot reads .env.c
 eyesonly rekey && git commit -am "rekey for ci-bot" && git push
 ```
 
-Store `ci-identity/identity.json` (raw or base64) as the secret `EYESONLY_IDENTITY`, delete
+Store `ci-identity/identity.json` (raw or base64; `eyesonly identity export --yes` prints the
+base64 form) as the secret `EYESONLY_IDENTITY`, delete
 the directory, and store the admin fingerprint from `eyesonly policy show` as the variable
 `EYESONLY_PIN_ADMIN`. Then:
 

@@ -10,15 +10,17 @@ it.
   The signed policy is committed in `.eyesonly/policy.json`. Clients and CI check every
   commit. Guide: [github-mode.md](github-mode.md).
 - **Server mode:** a small Node service in front of your repos. It holds the policy, checks
-  every push before storing it, and hides private branches. GitHub can stay as a mirror for
+  every push before storing it, and hides private branches altogether. GitHub can stay as a mirror for
   PRs and CI. Guide: [server-deployment.md](server-deployment.md).
 
 ## Which mode do I need?
 
 Start with GitHub mode unless one of these is true:
 
-- **You need private branches** (a launch branch only three people can see). Only the server
-  hides refs.
+- **A private branch must be invisible,** not just unreadable. GitHub mode seals private
+  branches (`eyesonly branch push`): the host can't read the name, commits or files, but it
+  sees that a sealed ref exists, its size and when it changes, and any writer can delete it.
+  Only the server hides refs altogether.
 - **A plaintext secret must never reach the host,** even from someone who skips or removes the
   client. In GitHub mode the pre-push hook stops honest mistakes and CI catches the rest, but a
   push made without the client is readable on the host until you rotate.
@@ -37,7 +39,7 @@ Start with GitHub mode unless one of these is true:
 | Plaintext push by someone without the client | detected by the required `eyesonly verify` check; already readable on the host | rejected before it's stored |
 | Writes attributed to | the envelope's signer | the authenticated pusher |
 | Deleting a protected file | reported by `verify`, not refused | refused for non-writers |
-| Private branches | not yet | invisible to non-members, even by SHA |
+| Private branches | sealed on the host: name, commits and author encrypted; size and push times visible | invisible to non-members, even by SHA |
 | Read-only members, protected refs | your host's settings | built in (`writers`, `protect`) |
 | Access tokens, a service to run and back up | none | yes |
 | Mirror to GitHub/GitLab for PRs and CI | not needed | built in (verified public refs only) |
@@ -67,7 +69,7 @@ admin keys every clone pinned: nobody deletes `.git/eyesonly/trust.json`.
 
 1. **Import the policy on the server.** It checks the repo policy's signature, registers every
    member with the key it lists (tokens printed once), and creates the repo with the same
-   groups, file rules and writers:
+   groups, file rules, writers and private-branch rules:
 
    ```bash
    git show main:.eyesonly/policy.json > policy.json                 # in a clone
@@ -89,12 +91,18 @@ admin keys every clone pinned: nobody deletes `.git/eyesonly/trust.json`.
    ```
 
 3. **Move the repo** (admin, in a GitHub-mode clone). `migrate` checks the server's policy
-   first, then pushes every branch (including ones that only exist on the old host), every
-   tag and `refs/eyesonly/*` to a new remote `eyesonly`, and switches the clone to the server:
+   first, then unseals the sealed private branches you can read (`eyesonly branch pull
+   --all`), pushes every branch (including ones that only exist on the old host) and tag to a
+   new remote `eyesonly`, and switches the clone to the server:
 
    ```bash
    eyesonly migrate --to https://alice:<token>@git.example.com/app.git
    ```
+
+   On the server, private branches are ordinary branches it hides from people outside their
+   audience, so the sealed `refs/eyesonly/b/*` copies aren't pushed. A sealed branch you can't
+   read stays on the old host; one of its writers runs `eyesonly branch pull <branch>` before
+   switching and `git push eyesonly <branch>` after.
 
    The server checks every commit it receives, so this works only if every envelope in
    history was signed by a writer of that path. History with plaintext secrets: see

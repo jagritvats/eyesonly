@@ -4,8 +4,7 @@
 name: eyesonly
 on:
   pull_request:
-  push:
-    branches: [main]
+  push:          # every branch: a private/* branch pushed in plaintext is flagged by name
 permissions:
   contents: read
 jobs:

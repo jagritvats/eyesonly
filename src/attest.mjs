@@ -17,7 +17,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { pubKey, privKey } from './crypto.mjs';
 import { expand } from './policy.mjs';
-import { identityPath, readIdentity } from './identity.mjs';
+import { identitySource, readIdentity } from './identity.mjs';
 
 const DOMAIN = 'eyesonly-policy-v1\0';
 const b64 = (b) => Buffer.from(b).toString('base64');
@@ -172,7 +172,7 @@ export function cmdPolicySign([file]) {
   } catch (e) {
     fail(e.message);
   }
-  if (!identity) fail(`no identity at ${identityPath()}. Run: eyesonly keygen <your-name> (or set EYESONLY_IDENTITY)`);
+  if (!identity) fail(`no identity at ${identitySource()}. Run: eyesonly keygen <your-name> (or set EYESONLY_IDENTITY)`);
   let manifest;
   try {
     manifest = JSON.parse(fs.readFileSync(file && file !== '-' ? file : 0, 'utf8'));

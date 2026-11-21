@@ -119,11 +119,21 @@ cd "$SB/carol" && as carol git pull -q origin main 2>/dev/null && as carol $EYES
 echo 'EXTRA=1' >> .env
 expect_ok "carol (writer now) stages .env" as carol git add .env
 as carol git reset -q --hard
+as carol git checkout -q -b private/carol && echo c > c.txt && as carol git add c.txt && as carol git commit -qm "carol private"
+expect_ok "carol (writer) seals private/carol" as carol $EYESONLY branch push
+as carol git checkout -q main
 cd "$SB/alice"
 expect_ok "alice revokes carol's write access" as alice $EYESONLY revoke carol --writer
 expect_out "carol is read-only again" "carol  .*read-only" as alice $EYESONLY policy show
 as alice git commit -qam "carol read-only" && as alice git push -q origin main
 cd "$SB/carol" && as carol git push -q origin --delete carol-forge 2>/dev/null
+as carol git pull -q origin main 2>/dev/null && as carol $EYESONLY pull-policy >/dev/null 2>&1
+as carol git checkout -q -b private/carol2 && echo d > d.txt && as carol git add d.txt && as carol git commit -qm "carol private 2"
+expect_reject "read-only carol can't seal a private branch" "but not write it (read-only" as carol $EYESONLY branch push
+as carol git checkout -q main
+expect_reject "read-only carol can't rotate .env" "read-only" as carol $EYESONLY rotate .env STRIPE=sk_carol
+cd "$SB/bob" && as bob git checkout -q main && as bob git pull -q origin main 2>/dev/null && as bob $EYESONLY pull-policy >/dev/null 2>&1
+expect_reject "bob refuses private/carol: sealed by carol, who is read-only now" "who may not write" as bob $EYESONLY branch pull private/carol
 
 echo "== admin pin fingerprints"
 PIN="$(adminpin alice)"
@@ -206,6 +216,10 @@ expect_reject "the server rejects an envelope signed by non-writer dave, pushed 
 as alice git reset -q --hard origin/main
 
 echo "== migrate GitHub mode -> server, pins carried over"
+cd "$SB/bob" && as bob git checkout -q main && as bob git pull -q origin main 2>/dev/null
+as bob git checkout -q -b private/launch && echo launch > launch.txt && as bob git add launch.txt && as bob git commit -qm "secret launch"
+expect_ok "bob seals private/launch on the old host" as bob $EYESONLY branch push
+as bob git checkout -q main
 cd "$SB/alice" && as alice git pull -q origin main 2>/dev/null
 git show main:.eyesonly/policy.json > "$SB/repo-policy.json"
 REPOV=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).manifest.version)' "$SB/repo-policy.json")
@@ -238,6 +252,9 @@ check "...with the pins carried over" grep -q '"migratedFrom"' .git/eyesonly/tru
 expect_out "alice still reads .env" "sk_live_2" cat .env
 check "the server has main" git --git-dir="$EYESONLY_DATA/repos/app.git" rev-parse --verify -q refs/heads/main
 check "...and bob's branch that only lived on the old host" git --git-dir="$EYESONLY_DATA/repos/app.git" rev-parse --verify -q refs/heads/bob-db
+check "the sealed private/launch became a real (hidden) branch on the server" git --git-dir="$EYESONLY_DATA/repos/app.git" rev-parse --verify -q refs/heads/private/launch
+check "...and no sealed refs were pushed" bash -c "[ -z \"\$(git --git-dir='$EYESONLY_DATA/repos/app.git' for-each-ref refs/eyesonly/)\" ]"
+check "the imported server policy keeps the private/ branch rule" bash -c "$VS policy show app.git | grep -q 'refs/heads/private/'"
 cd "$SB/carol"
 expect_out "carol switches to the server without touching trust.json" "moved to the server" as carol $EYESONLY setup --remote eyesonly --mode server
 check "carol's clone is in server mode" test "$(git config eyesonly.mode)" = server

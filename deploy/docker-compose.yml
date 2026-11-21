@@ -19,6 +19,10 @@ services:
     # Only Caddy talks to the server; it is never published on the host.
     expose:
       - "8787"
+    environment:
+      # Caddy is the only client, so its X-Forwarded-For / X-Forwarded-Proto are trusted:
+      # the admin API sees HTTPS and lockouts key on the real client address.
+      EYESONLY_TRUST_PROXY: "1"
 
   caddy:
     image: caddy:2.10-alpine

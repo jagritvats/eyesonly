@@ -21,6 +21,29 @@ hook and CI) prints the same `REJECTED: ...` lines. Admin CLI errors start with
 elsewhere, export `EYESONLY_HOME` in your shell profile. Git runs the filters with your
 environment.
 
+### `no identity in the macOS Keychain (eyesonly/alice), but ...config.json says it's there. Restore the keychain entry, ...`
+
+(or `Windows DPAPI` / `Secret Service (secret-tool)`.)
+**Cause:** `config.json` says the key is in the OS keychain, but the entry is gone: the
+keychain was reset, `identity.dpapi` was deleted, or you're on a different OS account
+(DPAPI is tied to your Windows account).
+**Fix:** restore the keychain entry from a backup. If you have a copy of the identity JSON,
+put it at `~/.eyesonly/identity.json` and delete `config.json`. Otherwise make a new key and
+have your admin swap it in ([team-workflows.md](team-workflows.md#lost-private-key-or-new-machine)).
+
+### `the OS keychain isn't available here (...). Use --store file, or set EYESONLY_IDENTITY`
+
+**Cause:** Linux without `secret-tool` (package `libsecret-tools`) or without a D-Bus
+session with a keyring, which is common on servers and in containers.
+**Fix:** `eyesonly keygen <name>` (file store), or pass the identity as `EYESONLY_IDENTITY`.
+
+### `couldn't save the identity to the ...` / `couldn't read the identity from the ...`
+
+**Cause:** the keychain tool refused: a locked macOS keychain, a denied access prompt, or
+PowerShell blocked by policy on Windows.
+**Fix:** unlock the keychain (macOS: `security unlock-keychain`) and retry. Nothing changed:
+`keygen` and `identity move` only switch stores after reading the new copy back.
+
 ### `no eyesonly policy cached for this repo. Run: eyesonly setup`
 
 **Cause:** this clone was made with plain `git clone`, or the policy cache was deleted.
@@ -116,6 +139,42 @@ envelope that fails verification (bad signer, moved from another path). An expli
 usually because the clone predates the `-text` pin.
 **Fix:** `eyesonly setup`. Smudge and clean undo the conversion either way, so nothing wrong
 gets committed.
+
+### `not a terminal: pass --yes to offboard without a prompt`
+
+**Cause:** `eyesonly offboard` asks before changing the policy, and there's no terminal to ask in
+(CI, a script, or input redirected).
+**Fix:** add `--yes`.
+
+### `<user> is still in the server's policy for <repo>. On the server, an admin runs: ...` (offboard)
+
+**Cause:** in server mode the server holds the policy, so `offboard` can't remove the user itself.
+It has already written the rotation checklist.
+**Fix:** run the printed `eyesonly-server` commands on the server, then `eyesonly offboard <user> --yes`
+again to re-encrypt for the remaining readers.
+
+### `you can't write '.env' (writers: alice, bob)` (rotate)
+
+**Cause:** `eyesonly rotate` only edits files whose audience includes you.
+**Fix:** ask one of the listed people to rotate it, or an admin to grant you the file.
+
+### `` '.env' isn't decrypted in this checkout: run `eyesonly setup` first `` (rotate)
+
+**Cause:** the working copy still holds ciphertext (no identity when it was checked out, or a plain
+`git clone`).
+**Fix:** `eyesonly setup`, then run `rotate` again.
+
+### `argument: expected KEY=value` / `stdin: expected KEY=value` (rotate)
+
+**Cause:** one of the pairs isn't `KEY=value` (key: letters, digits and `_`, not starting with a
+digit). The message never repeats the input, since it may hold a secret.
+**Fix:** check the pairs. With `--from-stdin`, blank lines and `#` comments are skipped.
+
+### `--at: '<x>' is not a date` (audit)
+
+**Cause:** `--at` takes a commit, tag or branch, or a date: `YYYY-MM-DD` (end of that day, UTC),
+an ISO timestamp, or a relative date like `2 weeks ago`.
+**Fix:** use one of those forms. `--all-refs` only works with a date.
 
 ## Committing
 
@@ -474,6 +533,48 @@ Reconcile by hand.
 
 Two mirror pushes overlapped, usually from cron. Remove the lock only if no push is
 running.
+
+## Admin API
+
+### `too many failed logins; try again later` (HTTP 429) or `too many failed attempts`
+
+**Cause:** wrong tokens from your address tripped the server's failed-login backoff (5 per
+user name by default, doubling lockouts up to 15 minutes). Behind a NAT, colleagues share an
+address.
+**Fix:** wait for the `Retry-After` seconds, fix the token (`git remote get-url origin`,
+your credential helper, or `--token-file`). Admins can raise the limits with
+`EYESONLY_AUTH_MAX_FAILURES`; a server restart clears all lockouts.
+
+### `admin token required (Authorization: Bearer eyesonlyadm_...)`
+
+**Cause:** no token, a git token instead of an admin token, a revoked token, or the token's
+user no longer admins anything. The two kinds of token never stand in for each other.
+**Fix:** on the server, `eyesonly-server admin-token create <you>`, then pass it with
+`--token-file` or `EYESONLY_ADMIN_TOKEN`.
+
+### `the admin API needs HTTPS`
+
+**Cause:** the request reached the server over plain HTTP from another machine, or through
+a proxy without `EYESONLY_TRUST_PROXY=1` (then every request looks like plain HTTP).
+**Fix:** use the https:// URL. Behind Caddy or nginx, set `EYESONLY_TRUST_PROXY=1` and make
+sure the proxy sends `X-Forwarded-Proto` ([server-deployment.md](server-deployment.md#behind-a-proxy)).
+
+### `refusing to send an admin token over plain http to <host>`
+
+**Cause:** `eyesonly admin --server http://...` for a host that isn't localhost.
+**Fix:** use https. On a network you fully trust, `--insecure` sends it anyway.
+
+### `only a server admin can do that` / `no such repo` (admin API)
+
+**Cause:** repo admins can change their own repos' policies but can't manage users or create
+repos, and see other repos as missing.
+**Fix:** ask a server admin (`eyesonly-server server-admin list` on the server).
+
+### `audit log FAILED verification at line N`
+
+**Cause:** a line at or before line N was edited, removed or inserted after it was written.
+**Fix:** treat it as an incident: compare with your backups and with the head hash you
+recorded, and find out who had write access to the data directory.
 
 ## Server
 

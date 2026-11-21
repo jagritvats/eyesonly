@@ -13,8 +13,9 @@
 
 **Private files and built-in secrets in the GitHub repo you already have.** `.env` and
 `secrets/**` are encrypted for the people the policy names, and everyone keeps the stock `git`
-client. No server needed to start. Add the Eyes Only server when you want private branches
-and plaintext pushes rejected before they're stored. Zero runtime dependencies (Node ≥ 22 + git).
+client. Private branches work too, sealed on the host. No server needed to start; add the
+Eyes Only server when private branches must be invisible and plaintext pushes rejected before
+they're stored. Zero runtime dependencies (Node ≥ 22 + git).
 
 ```
 alice$ cat .env          →  STRIPE_SECRET=sk_live_456
@@ -121,7 +122,7 @@ Secrets already committed in plaintext? The server rejects that history; see
 | Plaintext push from a laptop with the client | blocked (pre-push hook) | rejected |
 | Plaintext push from someone without the client | caught by CI; already visible to repo readers | rejected before it's stored |
 | Who changed a secret | the envelope's signer | the authenticated pusher |
-| Private branches | not yet | invisible to non-members |
+| Private branches | sealed: name, commits and author encrypted on the host | invisible to non-members |
 | Something to run | nothing | one small Node service |
 
 Same commands in both. The mode is detected per clone, and a remote that is an Eyes Only
@@ -139,16 +140,22 @@ pre-commit hook re-seals it for its new path.
 | `eyesonly doctor` | Checks identity, remote, policy, filters and hooks; prints a fix for each problem |
 | `eyesonly pull-policy && eyesonly rekey` | After access changes: refresh the policy and re-encrypt for the new audience |
 | `eyesonly run -- <cmd>` | Run a command with your protected `.env` files as environment variables, decrypted from the committed blobs (`--file .env.production` to pick one; `eyesonly env` prints them) |
-| `eyesonly audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
+| `eyesonly offboard <user>` | Remove someone, re-encrypt, and write a rotation checklist (key names only) |
+| `eyesonly audit <user>` · `audit --file .env --at 2026-03-01` | Every version someone could decrypt; who could read a file on a given date |
+| `eyesonly rotate .env KEY=value` | Set dotenv keys in a protected file and stage it encrypted (`--from-stdin` keeps values out of shell history) |
 | `eyesonly init` · `join` · `grant` · `revoke` · `policy show` | GitHub mode: start, ask for access, give or remove it, see who can read what |
 | `eyesonly grant <name> --read-only` · `--writer` | GitHub mode: read without write (`writers`), or undo it |
 | `eyesonly verify [--require-signed]` | GitHub mode: check commits like the server would (pre-push hook and CI); `--require-signed` also attributes changes to SSH commit signers (`grant <name> --ssh-signing-key`) |
 | `eyesonly migrate --to <server-url>` | Move a GitHub-mode repo onto a server after `eyesonly-server import`; pinned admin keys carry over |
 | `eyesonly whoami` | Your card, key fingerprint and admin-pin fingerprint (`EYESONLY_PIN_ADMIN`) |
+| `eyesonly branch push` · `pull` · `list` · `publish` · `delete` | GitHub mode: private branches (e.g. `private/*`) sealed on the host, squash-published when they ship ([guide](docs/github-mode.md#private-branches)) |
 | `eyesonly setup --remote <name>` | Use a remote other than `origin` (remembered) |
+| `eyesonly identity move --to keychain` | Keep your private key in the OS keychain (macOS Keychain, Windows DPAPI, Linux Secret Service) instead of a file; `identity show` says where it is |
 | `EYESONLY_IDENTITY` | Your identity JSON (or base64 of it) from the environment, for CI and containers ([CI guide](docs/ci.md)) |
 | `eyesonly-server init` · `user add` · `user set-key` · `policy set` | Server: bootstrap, users, keys, policy ([deployment](docs/server-deployment.md)) |
 | `eyesonly-server import <repo.git> --policy .eyesonly/policy.json` | Server: create a repo from a GitHub-mode policy (members, keys, rules) ([moving](docs/choosing-a-mode.md#move-from-github-mode-to-the-server)) |
+| `eyesonly admin --server <url> ...` | Server, from your machine: users, repos, grant/revoke, re-sign the policy over HTTPS with an admin token ([admin API](docs/admin-api.md)) |
+| `eyesonly-server audit-log [--verify]` | Server: who pushed, fetched, failed to log in or changed what, in a hash-chained log ([deployment](docs/server-deployment.md#audit-log)) |
 
 ## Guides
 
@@ -159,7 +166,8 @@ Also at [jagritvats.github.io/eyesonly/docs](https://jagritvats.github.io/eyeson
 - [Existing repos and clones](docs/existing-repos.md): add Eyes Only to a repo you have, onboard clones
 - [Team workflows](docs/team-workflows.md): grant and revoke access, private branches, offboarding
 - [CI](docs/ci.md): `eyesonly verify` as a required check, reading secrets in CI
-- [Server deployment](docs/server-deployment.md): TLS, systemd, Docker, backups
+- [Server deployment](docs/server-deployment.md): TLS, systemd, Docker, backups, audit log
+- [Admin API](docs/admin-api.md): manage the server from your machine with `eyesonly admin`
 - [Policy reference](docs/policy-reference.md): every policy field
 - [Troubleshooting](docs/troubleshooting.md): error messages and fixes
 
@@ -296,7 +304,8 @@ tests for both versions.
 ## What Eyes Only doesn't do
 
 - **Revocation isn't retroactive.** Someone who could read a secret has seen it.
-  `eyesonly audit <user>` lists exactly what to rotate.
+  `eyesonly offboard <user>` re-encrypts and writes the rotation checklist; `eyesonly audit <user>`
+  lists every version they could decrypt.
 - **File names, sizes and timestamps are visible** to everyone who can read the branch.
   Only the contents are protected.
 - **GitHub mode detects; the server prevents.** Without a server, a plaintext push from
@@ -306,9 +315,11 @@ tests for both versions.
 - **Admin trust is TOFU** unless you pin the admin key up front (`EYESONLY_PIN_ADMIN`).
 - **Protocol v0 only, plain HTTP.** Put TLS in front of the server, and a reverse proxy
   (Caddy, nginx) for rate limiting and timeouts; the server has neither built in.
-- **Your private key is a plain file.** `~/.eyesonly/identity.json` (mode 0600) isn't
-  passphrase-protected. On Windows, file modes aren't enforced, so it relies on your user
-  profile's permissions. Anyone who can read it can read your secrets.
+- **Your private key is a plain file by default.** `~/.eyesonly/identity.json` (mode 0600)
+  isn't passphrase-protected. `eyesonly keygen <name> --store keychain` (or
+  `eyesonly identity move --to keychain`) keeps it in the OS keychain instead: macOS
+  Keychain, Windows DPAPI or Linux Secret Service. Malware running as you can still ask the
+  keychain for it, as with any keychain secret.
 - **jj and other git frontends** work for branches, but they don't run git's clean/smudge
   filters, so encrypted files need the git CLI for now.
 - **No third-party audit yet.** Every defense has a test and the code is open; reports go
@@ -352,6 +363,9 @@ src/merge.mjs                       merge driver for protected files
 src/refguard.mjs                    protected refs, read-only members, rewind check
 src/attrs.mjs                       info/attributes pinning, filter-redirect check
 src/mirror.mjs                      outbound mirror to GitHub/GitLab
+src/store.mjs                       server state and operations (shared by the admin CLI and API)
+src/admin.mjs, src/admin-client.mjs admin API, admin tokens, login backoff; eyesonly admin
+src/auditlog.mjs                       hash-chained audit log
 src/server.mjs                      admin CLI, HTTP proxy, pre-receive hook
 action.yml, action/*.sh             GitHub Action: verify (GitHub mode) or clone + decrypt (server)
 test/*.sh                           adversarial suites (npm test runs them all)

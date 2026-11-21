@@ -366,7 +366,7 @@ function handle(req, res, opts) {
 }
 
 function cmdServe(args) {
-  const port = Number(args[args.indexOf('--port') + 1] || process.env.PORT || 8787);
+  const port = Number((args.includes('--port') && args[args.indexOf('--port') + 1]) || process.env.PORT || 8787);
   const host = args.includes('--host') ? args[args.indexOf('--host') + 1] : '127.0.0.1';
   const opts = { allowV2: process.env.EYESONLY_ALLOW_PROTOCOL_V2 === '1' };
   const server = http.createServer((req, res) => {

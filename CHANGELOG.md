@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 (2026-11-22)
+- Fix: `eyesonly setup` in an existing clone now decrypts files for readers. It used to skip files whose stat matched the index (any freshly pulled envelope) and left the index stat stale.
+- Fix: with `core.autocrlf=true` (Git for Windows' default) readers got ciphertext. The local attribute pin now sets `-text` on protected paths.
+- Fix: protected files over about 786 KB stayed modified forever (1 MiB buffer limit in the client's git calls).
+- Fix: `eyesonly clone` of an empty repo no longer crashes.
+- Fix: `eyesonly demo` runs from PowerShell/cmd on Windows (uses Git for Windows' bash, not WSL's).
+- Fix: `eyesonly-server serve --host X` without `--port` crashed.
+- Clear one-line errors instead of stack traces (no repo, no `origin`, server unreachable, unreadable identity); URLs in errors have their passwords redacted; `clone` warns when there's no identity or it doesn't match the server's user; `keygen` validates names.
+- Guides: existing repos and clones, team workflows, CI, server deployment, policy reference, troubleshooting; rendered at https://jagritvats.github.io/eyesonly/docs/.
+
 ## 0.3.0 (2026-11-22)
 - Protected refs and read-only members: no force-push, rewind or deletion of protected refs; admins included for content checks.
 - `filter=eyesonly` pinned in `.git/info/attributes`; redirected filters (LFS, nested `.gitattributes`) refused on client and server; `git worktree` and sparse-checkout fixed.

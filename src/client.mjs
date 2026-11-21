@@ -20,7 +20,8 @@ function die(msg) {
 }
 
 function git(args, opts = {}) {
-  return execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], ...opts });
+  // Large protected blobs overflow execFileSync's 1 MiB default and would be re-sealed on every clean.
+  return execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1 << 30, ...opts });
 }
 const gitStr = (args, opts) => git(args, { encoding: 'utf8', ...opts }).trim();
 
@@ -40,11 +41,16 @@ export function loadIdentity({ required = true } = {}) {
     if (required) die(`no identity at ${p}. Run: eyesonly keygen <your-name>`);
     return null;
   }
-  return JSON.parse(fs.readFileSync(p, 'utf8'));
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (e) {
+    die(`can't read your identity at ${p}: ${e.message}`);
+  }
 }
 
 function cmdKeygen([name]) {
   if (!name) die('usage: eyesonly keygen <name>');
+  if (!/^[a-z0-9][a-z0-9._-]{0,38}$/i.test(name)) die(`invalid name '${name}': use letters, digits, '.', '_' or '-' (max 39 characters), starting with a letter or digit`);
   const p = identityPath();
   if (fs.existsSync(p)) die(`identity already exists at ${p} (refusing to overwrite)`);
   fs.mkdirSync(EYESONLY_HOME(), { recursive: true, mode: 0o700 });
@@ -128,7 +134,12 @@ async function fetchPolicy(remoteUrl) {
   u.username = '';
   u.password = '';
   u.pathname = u.pathname.replace(/\/+$/, '') + '/eyesonly/policy';
-  const res = await fetch(u, { headers: { authorization: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64') } });
+  let res;
+  try {
+    res = await fetch(u, { headers: { authorization: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64') } });
+  } catch (e) {
+    die(`can't reach ${u.host}: ${e.cause?.code || e.cause?.message || e.message}`);
+  }
   if (!res.ok) die(`policy fetch failed: HTTP ${res.status} ${await res.text()}`);
   return res.json();
 }
@@ -160,7 +171,7 @@ async function loadResolved(remoteUrl, gitDirOrNull) {
 function saveResolved({ policy, trust }, dir) {
   writePolicy(policy, dir);
   if (trust) attest.saveTrust(dir || gitDir(), trust);
-  attrs.pinAttributes(attributeLines(policy), dir || gitDir()); // clone, setup and pull-policy all pin
+  attrs.pinAttributes(pinnedLines(policy), dir || gitDir()); // clone, setup and pull-policy all pin
 }
 
 function configureFilters(cwd) {
@@ -182,8 +193,14 @@ function attributeLines(policy) {
   return Object.keys(policy.files || {}).map((g) => `${g.startsWith('**/') ? g : '/' + g} filter=eyesonly diff=eyesonly merge=eyesonly`);
 }
 
+// The local pin also sets -text: with core.autocrlf=true (Git for Windows' default) git
+// converts line endings before smudge, the envelope's magic line no longer matches, and the
+// ciphertext would be written out as-is. It lives only in info/attributes, so committed
+// .gitattributes stay the same for everyone.
+const pinnedLines = (policy) => attributeLines(policy).map((l) => `${l} -text`);
+
 function ensureAttributes(policy, cwd) {
-  attrs.pinAttributes(attributeLines(policy), attrs.commonGitDir(cwd)); // wins over any in-tree .gitattributes
+  attrs.pinAttributes(pinnedLines(policy), attrs.commonGitDir(cwd)); // wins over any in-tree .gitattributes
   const p = path.join(cwd, '.gitattributes');
   const existing = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
   // Lines written before the merge driver existed lack ` merge=eyesonly`: upgrade them in place.
@@ -216,9 +233,25 @@ function protectedFiles(policy, cwd) {
     .filter((f) => fileRule(policy, f));
 }
 
+function originUrl(cwd) {
+  try {
+    return gitStr(['config', 'remote.origin.url'], { cwd });
+  } catch {
+    die("this repo has no 'origin' remote. Point origin at your Eyes Only server, e.g.\n  git remote add origin https://<you>@git.example.com/<repo>.git   (or: git remote set-url origin ...)");
+  }
+}
+
+function repoTop() {
+  try {
+    return gitStr(['rev-parse', '--show-toplevel']);
+  } catch {
+    die('not inside a git repository. cd into your clone first (or use `eyesonly clone <url>`).');
+  }
+}
+
 async function cmdSetup() {
-  const top = gitStr(['rev-parse', '--show-toplevel']);
-  const remote = gitStr(['config', 'remote.origin.url'], { cwd: top });
+  const top = repoTop();
+  const remote = originUrl(top);
   const resolved = await loadResolved(remote, gitDir());
   const { policy } = resolved;
   const id = loadIdentity({ required: false });
@@ -227,12 +260,23 @@ async function cmdSetup() {
   configureFilters(top);
   ensureAttributes(policy, top);
   const files = protectedFiles(policy, top);
-  if (files.length) git(['checkout-index', '-f', '--', ...files], { cwd: top }); // re-smudge
+  // Re-smudge. `checkout-index -f` skips files whose stat matches the index (a freshly
+  // pulled envelope), so remove working copies that are still envelopes first. Plaintext
+  // working copies are left alone: they're already decrypted or hold local edits.
+  const sealed = files.filter((f) => {
+    try {
+      return vc.isEnvelope(fs.readFileSync(path.join(top, f)));
+    } catch {
+      return true; // missing: let checkout-index restore it
+    }
+  });
+  for (const f of sealed) fs.rmSync(path.join(top, f), { force: true });
+  if (sealed.length) git(['checkout-index', '-f', '-u', '--', ...sealed], { cwd: top }); // -u: refresh index stat
   log(`ready. ${files.length} protected file(s) in this checkout.`);
 }
 
 async function cmdPullPolicy() {
-  const remote = gitStr(['config', 'remote.origin.url']);
+  const remote = originUrl(repoTop());
   saveResolved(await loadResolved(remote, gitDir()));
   log('policy updated. Run `eyesonly rekey` if file access changed.');
 }
@@ -241,10 +285,16 @@ async function cmdClone([url, dir]) {
   if (!url) die('usage: eyesonly clone <url> [dir]');
   const resolved = await loadResolved(url, null); // before cloning: a bad policy leaves nothing behind
   const { policy } = resolved;
+  const id = loadIdentity({ required: false });
+  if (!id) log(`warning: no identity at ${identityPath()}, so nothing will be decrypted. Run: eyesonly keygen <your-name>`);
+  else if (policy.user !== id.name) log(`warning: server says you are '${policy.user}' but your identity is '${id.name}', so nothing will be decrypted`);
   dir = path.resolve(dir || path.basename(new URL(url).pathname).replace(/\.git$/, ''));
   execFileSync('git', ['clone', '--quiet', '--no-checkout', url, dir], { stdio: 'inherit' });
   saveResolved(resolved, path.join(dir, '.git'));
   configureFilters(dir);
+  if (spawnSync('git', ['rev-parse', '--verify', '-q', 'HEAD'], { cwd: dir }).status !== 0) {
+    return log(`cloned an empty repository into ${dir}. Add files, commit and push; protected paths are encrypted automatically.`);
+  }
   execFileSync('git', ['reset', '--quiet', '--hard', 'HEAD'], { cwd: dir, stdio: ['ignore', 'ignore', 'inherit'] });
   const files = protectedFiles(policy, dir);
   const locked = files.filter((f) => vc.isEnvelope(fs.readFileSync(path.join(dir, f))));
@@ -405,9 +455,22 @@ function cmdAudit([user]) {
 }
 
 // The demo is a bash script so it reads like the commands a user would type.
+/** On Windows, plain `bash` may resolve to WSL's System32ash.exe; prefer Git for Windows' bash. */
+function findBash() {
+  if (process.platform !== 'win32') return 'bash';
+  try {
+    const exec = gitStr(['--exec-path']); // <git>/mingw64/libexec/git-core
+    for (const rel of ['../../../bin/bash.exe', '../../../usr/bin/bash.exe']) {
+      const b = path.resolve(exec, rel);
+      if (fs.existsSync(b)) return b;
+    }
+  } catch {}
+  return 'bash';
+}
+
 function cmdDemo() {
   const script = path.resolve(path.dirname(CLI), '..', 'examples', 'demo.sh');
-  const r = spawnSync('bash', [script], { stdio: 'inherit' });
+  const r = spawnSync(findBash(), [script.split(path.sep).join('/')], { stdio: 'inherit' });
   if (r.error) die(`couldn't run the demo (needs bash, git and curl): ${r.error.message}`);
   process.exit(r.status ?? 1);
 }
@@ -454,5 +517,13 @@ export async function main(argv) {
     console.error(USAGE);
     process.exit(cmd ? 1 : 0);
   }
-  await table[cmd](rest);
+  try {
+    await table[cmd](rest);
+  } catch (e) {
+    // No stack traces for expected failures, and never echo credentials embedded in URLs.
+    const redact = (t) => String(t).replace(/(\/\/[^/:@\s]+):[^@\s]+@/g, '$1:***@');
+    const detail = e.stderr?.toString().trim() || e.message;
+    if (process.env.EYESONLY_DEBUG) console.error(redact(e.stack));
+    die(redact(detail));
+  }
 }

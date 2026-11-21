@@ -71,7 +71,7 @@ printf '#!/bin/sh\ntouch "$MARK"\n' > "$SB/bob2/.git/hooks/pre-commit" && chmod 
 in_ "$SB/bob2" as bob $EYESONLY setup 2>/dev/null
 check "the user hook is preserved as pre-commit.local" grep -q 'touch "$MARK"' "$SB/bob2/.git/hooks/pre-commit.local"
 check "pre-commit.local keeps its exec bit" test -x "$SB/bob2/.git/hooks/pre-commit.local"
-in_ "$SB/bob2" bash -c 'echo "// tweak" >> index.js && git add index.js'
+in_ "$SB/bob2" as bob bash -c 'echo "// tweak" >> index.js && git add index.js'
 expect_ok "bob commits public code with the chained hook" in_ "$SB/bob2" as bob env MARK="$SB/mark1" git commit -qm tweak
 check "the user hook ran (its marker file exists)" test -f "$SB/mark1"
 in_ "$SB/bob2" bash -c 'echo STRIPE_SECRET=plain > .env && git -c filter.eyesonly.clean=cat add .env'
@@ -175,6 +175,34 @@ grep -q 'eyesonly.mjs.* clean' "$SB/trace" && bad "the clean filter was spawned"
 expect_ok "committing only index.js succeeds" as alice git commit -qm "code only"
 [[ -z "$(as alice git status --porcelain)" ]] && ok "status clean after code-only commit" || { bad "status dirty"; as alice git status --porcelain | sed 's/^/        /'; }
 expect_ok "no policy cached: the hook is a no-op" bash -c "cd '$SB' && git init -q plain && cd plain && $EYESONLY pre-commit"
+
+echo "== onboarding an existing clone"
+# A plain `git clone` (e.g. made before the repo moved to eyesonly) leaves envelopes whose
+# stat matches the index; `git checkout-index -f` alone would skip them, and without -u
+# the index keeps the envelope's size so git status reports the file as modified.
+git clone -q "$(url bob)" "$SB/bob-plain" 2>/dev/null
+expect_out "plain clone holds the envelope" "EYESONLY-V1" head -1 "$SB/bob-plain/.env"
+expect_ok "bob runs eyesonly setup in it" in_ "$SB/bob-plain" as bob $EYESONLY setup
+expect_out "setup decrypts .env for a reader" "STRIPE_SECRET=" cat "$SB/bob-plain/.env"
+as bob $EYESONLY clone "$(url bob)" "$SB/bob-fresh" >/dev/null 2>&1
+[[ "$(in_ "$SB/bob-plain" as bob git status --porcelain)" == "$(in_ "$SB/bob-fresh" as bob git status --porcelain)" ]] && ok "after setup, bob's plain clone matches a fresh eyesonly clone" || { bad "plain clone differs from fresh clone"; in_ "$SB/bob-plain" as bob git status --porcelain | sed 's/^/        /'; }
+git clone -q "$(url junior)" "$SB/junior-plain" 2>/dev/null
+expect_ok "junior runs eyesonly setup in a plain clone" in_ "$SB/junior-plain" as junior $EYESONLY setup
+expect_out "junior still gets the envelope" "EYESONLY-V1" head -1 "$SB/junior-plain/.env"
+[[ -z "$(in_ "$SB/junior-plain" git status --porcelain)" ]] && ok "junior's status is clean after setup" || bad "junior status dirty"
+echo "== autocrlf and large secrets"
+# Git for Windows defaults to core.autocrlf=true; line-ending conversion must not touch envelopes.
+CRLF=(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=true)
+expect_ok "bob clones with core.autocrlf=true" as bob "${CRLF[@]}" $EYESONLY clone "$(url bob)" "$SB/bob-crlf"
+expect_out "autocrlf: .env is decrypted" "STRIPE_SECRET=" cat "$SB/bob-crlf/.env"
+[[ -z "$(in_ "$SB/bob-crlf" as bob "${CRLF[@]}" git status --porcelain)" ]] && ok "autocrlf: status is clean" || { bad "autocrlf: status dirty"; in_ "$SB/bob-crlf" as bob "${CRLF[@]}" git status --porcelain | sed 's/^/        /'; }
+# Envelopes over 1 MiB overflowed the client's git() buffer, so clean re-sealed them every time.
+in_ "$SB/bob-fresh" as bob bash -c 'head -c 900000 /dev/urandom > secrets/big.bin && git add secrets/big.bin && git commit -qm big' >/dev/null 2>&1
+rm -f "$SB/bob-fresh/secrets/big.bin"; in_ "$SB/bob-fresh" as bob git checkout -q -- secrets/big.bin
+[[ -z "$(in_ "$SB/bob-fresh" as bob git status --porcelain)" ]] && ok "a 900 KB secret is clean after checkout" || { bad "large secret stays modified"; in_ "$SB/bob-fresh" as bob git status --porcelain | sed 's/^/        /'; }
+
+$VS repo create empty.git --admin alice 2>/dev/null
+expect_out "eyesonly clone of an empty repo succeeds" "cloned an empty repository" as bob $EYESONLY clone "http://bob:${TOK[bob]}@127.0.0.1:$PORT/empty.git" "$SB/empty"
 
 echo
 echo "$PASS passed, $FAIL failed"

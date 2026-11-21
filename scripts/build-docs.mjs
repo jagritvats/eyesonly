@@ -28,29 +28,37 @@ const OUT = path.resolve(args[0] || path.join(ROOT, '_site'));
 
 // Guide order and grouping on the index. Guides not listed here go under "More guides".
 const GROUPS = [
-  { title: 'Get started', slugs: ['existing-repos'] },
-  { title: 'Run it', slugs: ['server-deployment', 'ci'] },
+  { title: 'Get started', slugs: ['github-mode', 'existing-repos', 'choosing-a-mode'] },
+  { title: 'Run it', slugs: ['ci', 'server-deployment'] },
   { title: 'Day to day', slugs: ['team-workflows', 'policy-reference'] },
   { title: 'When something breaks', slugs: ['troubleshooting'] },
 ];
+// Short redirect stubs: rendered (so links to them work) but left out of the index and sidebar.
+const HIDDEN = new Set(['repo-mode']);
 
 // Common scenarios. Each links to the first h2/h3 matching `match` in the guide(s) named by
 // `in` (null = any guide). If none matches, `url` is used when given; otherwise the scenario
 // is skipped with a warning (guides are allowed to be missing).
 const SCENARIOS = [
-  { label: 'Move an existing GitHub repo onto Eyes Only', in: 'existing-repos', match: /(move|migrat|import|bring).*(repo|github)|existing (github )?repo/i },
-  { label: 'Onboard a teammate who already has a clone', in: 'existing-repos', match: /clone/i },
-  { label: 'Add a new teammate', in: 'team-workflows', match: /add a teammate|new teammate|onboard/i },
+  { label: 'Start on GitHub without a server', in: 'github-mode', match: /^start/i },
+  { label: 'Choose GitHub mode or the server', in: 'choosing-a-mode', match: /which mode|decide|at a glance/i },
+  { label: 'Add Eyes Only to your existing GitHub repo', in: 'existing-repos', match: /add eyes only to your existing/i },
+  { label: 'Add a teammate (GitHub mode)', in: 'github-mode', match: /add a teammate/i },
+  { label: 'Block bad merges with eyesonly verify', in: 'github-mode', match: /require it in ci/i },
+  { label: 'Move a repo onto the Eyes Only server', in: 'existing-repos', match: /move an existing repo onto the eyes only server/i },
+  { label: 'Move from GitHub mode to the server', in: 'choosing-a-mode', match: /move from github mode/i },
+  { label: 'Onboard a teammate who already has a clone', in: 'existing-repos', match: /onboard a teammate/i },
+  { label: 'Add a new teammate (server)', in: 'team-workflows', match: /add a teammate|new teammate|onboard/i },
   { label: 'Start tracking a .env that was gitignored', in: 'existing-repos', match: /\.env|gitignore|start tracking/i },
-  { label: 'Give someone access to .env', in: 'team-workflows', match: /who can read|access to/i },
+  { label: 'Give someone access to .env', in: 'team-workflows', match: /github mode: add|who can read|access to/i },
   { label: 'Work on a private branch', in: 'team-workflows', match: /private branch/i },
   { label: 'Offboard someone', in: 'team-workflows', match: /offboard/i },
   { label: 'Rotate a secret', in: 'team-workflows', match: /rotate a secret/i },
   { label: 'Lost a private key', in: 'team-workflows', match: /lost.*key/i },
-  { label: 'Read secrets in CI', in: 'ci', match: /create a ci identity|ci identity|ci user/i },
+  { label: 'Read secrets in CI', in: 'ci', match: /read secrets in ci|create a ci identity/i },
   { label: 'Run the server behind TLS', in: 'server-deployment', match: /tls|caddy|nginx/i },
   { label: 'Back up the server', in: 'server-deployment', match: /backup|back up/i },
-  { label: 'Mirror to GitHub', in: null, match: /^mirror(ing)? to|set up (the )?mirror/i, url: `${REPO}#mirroring-to-githubgitlab` },
+  { label: 'Mirror to GitHub (server)', in: null, match: /^mirror(ing)? to|set up (the )?mirror/i, url: `${REPO}#mirroring-to-githubgitlab-server` },
   { label: 'Write a policy', in: 'policy-reference', match: /^example$|write a policy/i },
   { label: 'Sign the policy', in: 'policy-reference', match: /sign and install|signed polic/i },
   { label: 'Fix a rejected push', in: 'troubleshooting', match: /^pushing$|rejected push/i },
@@ -345,6 +353,7 @@ function renderGuide(g, guides) {
 // ------------------------------------------------------------------ page shell
 
 function ordered(guides) {
+  guides = guides.filter((g) => !HIDDEN.has(g.slug));
   const used = new Set();
   const groups = GROUPS.map((gr) => {
     const list = gr.slugs.map((s) => guides.find((g) => g.slug === s)).filter(Boolean);

@@ -157,6 +157,44 @@ ref to a tree whose protected files are invalid under the current policy. That i
 force-pushing `main` back to a commit from before a rekey, which fails with
 `encrypted to users outside the policy`.
 
+## Separate secrets per environment
+
+Give each environment its own file and its own audience. Developers get development values,
+only the deploy pipeline and a couple of people get production:
+
+```json
+{
+  "members": ["*"],
+  "admins":  ["alice"],
+  "groups":  { "core": ["alice", "bob", "carol"], "deploy": ["alice", "ci-prod"] },
+  "writers": ["@core"],
+  "files": {
+    ".env.development": ["*"],
+    ".env.staging":     ["@core", "ci-staging"],
+    ".env.production":  ["@deploy"]
+  }
+}
+```
+
+- `"*"` means every registered user, so contractors can run the app locally without seeing
+  staging or production values.
+- After changing the policy, someone in each file's audience runs
+  `eyesonly pull-policy && eyesonly rekey` and pushes. Only readers can rekey a file.
+- Everyone else sees ciphertext for the files outside their audience, and the server
+  rejects their changes to them.
+
+Load one environment into a command with `eyesonly run`. It decrypts from the committed
+version of the file, so nothing extra lands on disk:
+
+```bash
+eyesonly run --file .env.development -- npm run dev
+eyesonly run --file .env.production -- ./deploy.sh     # refuses unless you're in @deploy
+```
+
+With no `--file`, `eyesonly run` loads every `.env` and `.env.*` you can read (in sorted
+order, later files winning) and skips the rest with a note. An explicit `--file` you can't
+read is an error, and the command doesn't run. For CI users, see [ci.md](ci.md).
+
 ## Rotate a secret
 
 1. Get a new value from the provider (Stripe, AWS, ...).
@@ -215,12 +253,49 @@ eyesonly pull-policy        # pins the current signer; compare the printed finge
 
 Set `EYESONLY_PIN_ADMIN=<fingerprint>` while doing this to refuse anything else.
 
-## Lost private key
+## Lost private key or new machine
 
-There's no key escrow. If a user loses `~/.eyesonly/identity.json`:
+There's no key escrow. A user who loses `~/.eyesonly/identity.json`, or wants a fresh key
+on a new laptop instead of copying the old file, gets a new key under the same name. Their
+token, group memberships and policy entries stay as they are.
 
-1. They run `eyesonly keygen <name>` again. Use a new name, or remove the old user first.
-2. You run `user remove <old>` and `user add <new card>`, then fix the policy.
-3. Someone else who can read each file rekeys for them.
+1. The user makes a new key with the **same name**:
 
-Files only the lost key could read can't be recovered.
+   ```bash
+   eyesonly keygen bob          # on the new machine; prints a new card
+   ```
+
+2. The admin swaps the key on the server:
+
+   ```bash
+   eyesonly-server user set-key eyesonlypub1:...
+   ```
+
+   It prints the old and new fingerprints and, per repo, what has to happen next.
+
+3. **Signed policy:** if the repo uses one, re-sign it. Clients keep the old keys until you
+   do (`policy manifest` -> `eyesonly policy-sign` -> `policy attest`, see
+   [policy-reference.md](policy-reference.md)). If the user is the signing admin, members
+   also re-pin once they've checked the new fingerprint with them (see above).
+
+4. **Re-wrap the files** for the new key. Someone who can read them and has them decrypted:
+
+   ```bash
+   eyesonly pull-policy && eyesonly rekey
+   git commit -am "rekey for bob's new key" && git push
+   ```
+
+   `eyesonly status` shows `needs rekey (new key for bob)` until this is done.
+
+5. The user clones on the new machine with their existing token (or runs `eyesonly setup`
+   in an existing clone).
+
+Things to know:
+
+- Files the user last wrote were signed with the old key. Clients refuse those until step 4
+  re-seals them, so do step 4 promptly.
+- Files only the lost key could read can't be recovered.
+- If the old key was lost or stolen, whoever has it can still read everything it could
+  decrypt before. Run `eyesonly audit <name>` and rotate what it lists.
+- To give one person several machines, copy `identity.json` to each (mode 0600). One key
+  per user is all the server tracks today.

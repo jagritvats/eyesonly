@@ -1,0 +1,61 @@
+name: Eyes Only checkout
+description: Clone an Eyes Only repo in CI and decrypt the protected files this CI user may read.
+author: Eyes Only contributors
+branding:
+  icon: lock
+  color: green
+
+inputs:
+  url:
+    description: Repo URL on your Eyes Only server, without credentials (https://git.example.com/app.git)
+    required: true
+  user:
+    description: The CI user's name on the server
+    required: true
+  token:
+    description: The CI user's access token (pass a secret)
+    required: true
+  identity:
+    description: The CI user's identity.json, raw or base64 (pass a secret)
+    required: true
+  path:
+    description: Directory to clone into
+    required: false
+    default: app
+  version:
+    description: eyesonly version to install from npm
+    required: false
+    default: latest
+  allow-locked:
+    description: Don't fail when a file this user is a reader of stays encrypted
+    required: false
+    default: 'false'
+
+outputs:
+  path:
+    description: Absolute path of the clone
+    value: ${{ steps.clone.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - id: node
+      shell: bash
+      run: |
+        major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+        echo "need=$([ "$major" -ge 22 ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+    - if: steps.node.outputs.need == 'true'
+      uses: actions/setup-node@v7
+      with:
+        node-version: 22
+    - id: clone
+      shell: bash
+      env:
+        EO_URL: ${{ inputs.url }}
+        EO_USER: ${{ inputs.user }}
+        EO_TOKEN: ${{ inputs.token }}
+        EO_IDENTITY: ${{ inputs.identity }}
+        EO_PATH: ${{ inputs.path }}
+        EO_VERSION: ${{ inputs.version }}
+        EO_ALLOW_LOCKED: ${{ inputs.allow-locked }}
+      run: bash "$GITHUB_ACTION_PATH/action/setup.sh"

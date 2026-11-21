@@ -12,11 +12,11 @@
 // JSON sorts object keys. Clients pin the admin key on first contact (TOFU, in
 // .git/eyesonly/trust.json) and refuse unsigned, re-signed, rolled-back or foreign policies.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { pubKey, privKey } from './crypto.mjs';
 import { expand } from './policy.mjs';
+import { identityPath, readIdentity } from './identity.mjs';
 
 const DOMAIN = 'eyesonly-policy-v1\0';
 const b64 = (b) => Buffer.from(b).toString('base64');
@@ -144,7 +144,6 @@ export function saveTrust(gitDir, trust) {
 
 // ------------------------------------------------------------- admin (client)
 
-const identityPath = () => path.join(process.env.EYESONLY_HOME || path.join(os.homedir(), '.eyesonly'), 'identity.json');
 
 /** eyesonly policy-sign [file]: sign the output of `eyesonly-server policy manifest`. */
 export function cmdPolicySign([file]) {
@@ -152,9 +151,13 @@ export function cmdPolicySign([file]) {
     console.error('[eyesonly]', msg);
     process.exit(1);
   };
-  const idp = identityPath();
-  if (!fs.existsSync(idp)) fail(`no identity at ${idp}. Run: eyesonly keygen <your-name>`);
-  const identity = JSON.parse(fs.readFileSync(idp, 'utf8'));
+  let identity;
+  try {
+    identity = readIdentity();
+  } catch (e) {
+    fail(e.message);
+  }
+  if (!identity) fail(`no identity at ${identityPath()}. Run: eyesonly keygen <your-name> (or set EYESONLY_IDENTITY)`);
   let manifest;
   try {
     manifest = JSON.parse(fs.readFileSync(file && file !== '-' ? file : 0, 'utf8'));

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+- `eyesonly-server init --admin <card> --repo <name.git>`: one-command bootstrap (admin user, first repo, starter policy with a `core` group for `.env` and `secrets/**` and private branches); prints the token once and the next commands. Refuses to touch an existing user or repo.
+- `eyesonly-server user set-key <card>`: replace a user's keys (lost key, new machine) and keep their token; prints per-repo next steps (rekey, re-sign, re-pin).
+- Envelopes record a key id per recipient, so `rekey`, `status` ("needs rekey (new key for bob)"), the pre-commit hook and the server notice a wrap made for an old public key. Before, a recipient whose key changed under the same name kept the old wrap forever. Older envelopes still open; `eyesonly rekey` upgrades them.
+- `eyesonly clone` of an empty repo starts on `main` (protocol v0 can't advertise the unborn branch, so git fell back to `master`).
+- Deploy kit: `deploy/docker-compose.yml` + `deploy/Caddyfile` for automatic HTTPS; the Docker image's data dir is mode 0700.
+- `eyesonly run [--file <path>]... [--no-override] [--] <cmd>`: runs a command with protected dotenv files (default: every `.env` / `.env.*` you can read) loaded into its environment. Values are decrypted from the staged/committed blob with the same signature checks as the smudge filter, never from the working tree; a forged or moved envelope, or an explicit `--file` you can't read, aborts before the command starts. Exit codes and signals pass through.
+- `eyesonly env [--format dotenv|json|shell]`: prints the same variables.
+- `EYESONLY_IDENTITY`: the identity JSON (or base64 of it) from the environment; wins over `$EYESONLY_HOME/identity.json`. Error messages never echo it.
+- GitHub Action (`uses: jagritvats/eyesonly@v0.3`): installs eyesonly, keeps the token in a job-scoped credential helper (never in URLs or git config), clones, and fails if a file the CI user should read stayed encrypted.
+- Docs: separate secrets per environment; CI guide covers the action and `EYESONLY_IDENTITY`.
+- `clone`'s identity-mismatch warning now says which identity files are decrypted as.
+- Long-running filter process (`filter.eyesonly.process`, git's protocol v2): one process per git command instead of one per protected file. Advertises only `clean` and `smudge`, never `delay`. On Windows with 200 protected files: `git add` 33-51 s -> 4.3 s, `eyesonly clone` 23 s -> 6-9 s, `git status` after a touch 24-27 s -> 6.5 s. Single-shot clean/smudge stay configured as the fallback.
+- `eyesonly setup --remote <name>` / `pull-policy --remote <name>`: use a remote other than `origin` for the Eyes Only server (remembered in `eyesonly.remote`), so GitHub can stay `origin`.
+- `eyesonly clone https://user:token@...` hands the token to your git credential helper when one is configured and keeps only the user name in `.git/config`.
+- Filter, merge and hook commands use `eyesonly` from PATH when it is the same package, so they survive node upgrades and package moves; otherwise absolute paths as before.
+- `eyesonly doctor`: checks identity, remote, token storage, filters, hook, pinned attributes and policy freshness against the server; exits non-zero with a fix for each problem.
+- The clean filter refuses ciphertext that was edited or doesn't verify (e.g. a non-reader's editor appended to `.env`) instead of letting the server reject it at push time.
+- Envelopes whose line endings were converted (`core.autocrlf`) are repaired on smudge and clean, and `eyesonly status` reports them as `corrupted` instead of `decrypted`.
+
 ## 0.3.1 (2026-11-22)
 - Fix: `eyesonly setup` in an existing clone now decrypts files for readers. It used to skip files whose stat matched the index (any freshly pulled envelope) and left the index stat stale.
 - Fix: with `core.autocrlf=true` (Git for Windows' default) readers got ciphertext. The local attribute pin now sets `-text` on protected paths.

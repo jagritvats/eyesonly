@@ -13,19 +13,19 @@
 // Must not import client.mjs (client.mjs imports this file), so the few helpers it
 // needs are duplicated here.
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
 import { commonGitDir, checkResolvedFilters } from './attrs.mjs';
+import { identitySource, readIdentity } from './identity.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
-const EYESONLY_HOME = () => process.env.EYESONLY_HOME || path.join(os.homedir(), '.eyesonly');
 
 const MARK_BEGIN = '# >>> eyesonly pre-commit >>>';
 const MARK_END = '# <<< eyesonly pre-commit <<<';
+export { MARK_BEGIN as HOOK_MARK };
 
 const log = (msg) => console.error('[eyesonly] ' + msg);
 
@@ -50,8 +50,12 @@ function loadPolicy() {
 }
 
 function loadIdentity() {
-  const p = path.join(EYESONLY_HOME(), 'identity.json');
-  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
+  try {
+    return readIdentity();
+  } catch (e) {
+    log(e.message);
+    return null;
+  }
 }
 
 function recipientsFor(policy, allowed) {
@@ -66,16 +70,19 @@ const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x))
 
 const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-function eyesonlyBlock() {
-  return `${MARK_BEGIN}\n${q(process.execPath)} ${q(CLI)} pre-commit || exit 1\n${MARK_END}\n`;
+function eyesonlyBlock(command) {
+  return `${MARK_BEGIN}\n${command} pre-commit || exit 1\n${MARK_END}\n`;
 }
 
-/** Install (or refresh) the eyesonly pre-commit hook, chaining any existing user hook. */
-export function installPreCommitHook(cwd) {
+/**
+ * Install (or refresh) the eyesonly pre-commit hook, chaining any existing user hook.
+ * `command` runs the CLI: `eyesonly` from PATH, or quoted node + script paths.
+ */
+export function installPreCommitHook(cwd, command = `${q(process.execPath)} ${q(CLI)}`) {
   const hook = path.resolve(cwd, gitStr(['rev-parse', '--git-path', 'hooks/pre-commit'], { cwd }));
   const dir = path.dirname(hook);
   fs.mkdirSync(dir, { recursive: true });
-  const block = eyesonlyBlock();
+  const block = eyesonlyBlock(command);
 
   if (!fs.existsSync(hook)) {
     fs.writeFileSync(hook, '#!/bin/sh\n' + block, { mode: 0o755 });
@@ -152,8 +159,9 @@ function inspect(policy, p, blob, allowed) {
   } catch (e) {
     return { error: `cannot rekey '${p}': ${e.message}` };
   }
-  const want = Object.keys(recipientsFor(policy, allowed));
-  if (env.path === p && sameSet(Object.keys(env.keys), want)) return { ok: true };
+  const recipients = recipientsFor(policy, allowed);
+  const want = Object.keys(recipients);
+  if (env.path === p && sameSet(Object.keys(env.keys), want) && !vc.staleRecipients(env, recipients).length) return { ok: true };
   return { rekey: env };
 }
 
@@ -229,7 +237,7 @@ export function cmdPreCommit() {
     if (!r.rekey) continue;
     id ??= loadIdentity();
     if (!id) {
-      errors.push(`cannot rekey '${s.path}': no identity at ${path.join(EYESONLY_HOME(), 'identity.json')}. Run: eyesonly keygen <your-name>`);
+      errors.push(`cannot rekey '${s.path}': no usable identity (${identitySource()}). Run: eyesonly keygen <your-name>`);
       continue;
     }
     const sealed = reseal(policy, s.path, r.rekey, allowed, id);

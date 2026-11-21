@@ -2,6 +2,10 @@
 
 For developers and admins who hit an error: the message, what causes it, and how to fix it.
 
+Start with `eyesonly doctor` in the clone: it checks your identity, the remote and where
+the token comes from, the filters and hook, the pinned attributes and whether the cached
+policy matches the server, and prints a fix for each problem.
+
 Client messages start with `[eyesonly]`. Server-side rejections show up in `git push`
 output as `remote: [eyesonly] REJECTED: ...`. Admin CLI errors start with
 `[eyesonly-server]`.
@@ -22,9 +26,11 @@ environment.
 
 ### `eyesonly needs an http(s) remote, got: <url>`
 
-**Cause:** `origin` is a local path or an SSH URL. The client reads the policy from
-`remote.origin.url`, and the server only speaks HTTP(S).
-**Fix:** `git remote set-url origin https://<you>@git.example.com/app.git`, then `eyesonly setup`.
+**Cause:** the remote eyesonly uses (`origin`, or the one chosen with `--remote`) is a local
+path or an SSH URL, for example a GitHub remote. The server only speaks HTTP(S).
+**Fix:** if the Eyes Only server is another remote, `eyesonly setup --remote <name>`.
+Otherwise `git remote set-url origin https://<you>@git.example.com/app.git`, then
+`eyesonly setup`.
 
 ### `no credentials for <host>`
 
@@ -58,16 +64,65 @@ The clone works, but every protected file stays ciphertext.
 
 ### `this repo has no 'origin' remote`
 
-**Cause:** `eyesonly setup` and `pull-policy` read the policy from the `origin` remote.
-**Fix:** point `origin` at the Eyes Only server (keep GitHub under another name, e.g.
-`github`). See [existing-repos.md](existing-repos.md).
+**Cause:** `eyesonly setup` and `pull-policy` read the policy from `origin` unless you chose
+another remote with `--remote`.
+**Fix:** `eyesonly setup --remote <name>` for the remote that points at the Eyes Only server
+(remembered in `git config eyesonly.remote`), or add an `origin`. See
+[existing-repos.md](existing-repos.md).
+
+### `no remote named '<name>' in this repo`
+
+**Cause:** `--remote` (or the remembered `eyesonly.remote`) names a remote that doesn't exist.
+**Fix:** `git remote -v`, then `eyesonly setup --remote <existing-name>`.
+
+### `smudge filter eyesonly failed` / `the configured filter command doesn't run` after moving node or eyesonly
+
+**Cause:** the filters point at a node or eyesonly path that no longer exists (an nvm switch,
+a cleared npx cache, a reinstall to another prefix). With `eyesonly` on your PATH, `setup`
+writes `eyesonly ...` commands that survive this; otherwise it writes absolute paths.
+**Fix:** `eyesonly setup` in the clone rewrites the commands for this machine.
 
 ### `can't reach <host>: ...`
 
 **Cause:** the server is down, the URL is wrong, or you're offline.
 **Fix:** check `git remote get-url origin` and that `https://<host>/healthz` answers `ok`.
 
+### `EYESONLY_IDENTITY is set but is neither identity JSON nor base64 of it`
+
+**Cause:** the variable holds something else: a truncated secret, a path, or base64 of the
+wrong file. The message never repeats the value.
+**Fix:** store the whole `identity.json` (or `base64 -w0 identity.json`) in the secret.
+Unset the variable to fall back to `$EYESONLY_HOME/identity.json`.
+
+### `refusing to load '.env': ...` / `you are not a reader of '.env.production'` (eyesonly run)
+
+**Cause:** `eyesonly run` and `eyesonly env` only load files you can decrypt, and stop on any
+envelope that fails verification (bad signer, moved from another path). An explicit
+`--file` you can't read stops everything, and the command doesn't run.
+**Fix:** ask a reader to add you (then they `rekey`), or drop that `--file`. Without
+`--file`, unreadable files are skipped with a note.
+
+### `note: .env has unstaged edits; using the staged version`
+
+**Cause:** `eyesonly run` reads the staged blob, not the working tree.
+**Fix:** `git add .env` to use your edits.
+
+### `eyesonly status` shows `corrupted`, or `line endings were converted before decryption`
+
+**Cause:** git converted the envelope's line endings (`core.autocrlf`) before eyesonly saw it,
+usually because the clone predates the `-text` pin.
+**Fix:** `eyesonly setup`. Smudge and clean undo the conversion either way, so nothing wrong
+gets committed.
+
 ## Committing
+
+### `` refusing to stage '.env': its ciphertext was edited or isn't valid (...). If you can't read it, restore it with: git checkout -- .env ``
+
+**Cause:** you can't read the file, and its ciphertext no longer matches anything committed
+or staged and doesn't verify: an editor or tool appended to it, it was hand-edited, or it's
+an envelope signed by someone who may not write it. The server would reject it anyway.
+**Fix:** `git checkout -- .env`. To change the file, ask someone in its audience
+(`eyesonly status` lists them).
 
 ### `'.env' has filter=eyesonly in .gitattributes but no rule in the policy. Refusing to commit it in plaintext.`
 

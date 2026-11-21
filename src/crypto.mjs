@@ -3,6 +3,8 @@
 //   content:  AES-256-GCM(DEK, plaintext, AAD = "eyesonly-v1\0" + path)
 //   wrapping: per recipient, X25519(ephemeral, recipient) -> HKDF-SHA256 -> KEK
 //             AES-256-GCM(KEK, DEK, AAD = "eyesonly-wrap\0" + recipient)
+//             + kid = sha256(recipient public key)[:16 hex], so a wrap for an old key is
+//             detectable (optional on read: envelopes from before 0.3.2 have none)
 //   signing:  Ed25519 over the canonical JSON of every field except `sig`
 //
 // Binding the path into the AAD means a ciphertext can't be moved from one
@@ -75,8 +77,36 @@ function kek(shared, epkDer, rpkDer) {
   return Buffer.from(crypto.hkdfSync('sha256', shared, Buffer.concat([epkDer, rpkDer]), 'eyesonly-wrap-v1', 32));
 }
 
+/** Short id of an X25519 public key (b64 spki). Each wrapped key records the id it was made for. */
+export const keyId = (x25519Pub) => crypto.createHash('sha256').update(unb64(x25519Pub)).digest('hex').slice(0, 16);
+
+/**
+ * Recipients whose wrapped key was made for a different public key than `recipients`
+ * (name -> x25519) holds now, e.g. after `eyesonly-server user set-key`. Entries from before
+ * key ids existed count as current unless `strict`.
+ */
+export function staleRecipients(env, recipients, { strict = false } = {}) {
+  return Object.keys(recipients).filter((n) => {
+    const e = env.keys[n];
+    if (!e) return false;
+    return typeof e.kid === 'string' ? e.kid !== keyId(recipients[n]) : strict;
+  });
+}
+
 export function isEnvelope(buf) {
   return buf.length >= MAGIC_BUF.length && buf.subarray(0, MAGIC_BUF.length).equals(MAGIC_BUF);
+}
+
+const CRLF_MAGIC_BUF = Buffer.from('EYESONLY-V1\r\n');
+
+/** An envelope whose line endings were converted to CRLF (e.g. core.autocrlf before smudge). */
+export function isCrlfEnvelope(buf) {
+  return buf.length >= CRLF_MAGIC_BUF.length && buf.subarray(0, CRLF_MAGIC_BUF.length).equals(CRLF_MAGIC_BUF);
+}
+
+/** Undo CRLF conversion. Envelopes never contain a CR (JSON escapes it), so this is exact. */
+export function fromCrlf(buf) {
+  return Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
 }
 
 /**
@@ -104,7 +134,7 @@ export function seal({ plaintext, path, recipients, signer }) {
     const wc = crypto.createCipheriv('aes-256-gcm', kek(shared, epkDer, rpkDer), wiv, GCM);
     wc.setAAD(Buffer.from('eyesonly-wrap\0' + name));
     const wrapped = Buffer.concat([wc.update(dek), wc.final(), wc.getAuthTag()]);
-    keys[name] = { iv: b64(wiv), key: b64(wrapped) };
+    keys[name] = { iv: b64(wiv), key: b64(wrapped), kid: keyId(recipients[name]) };
   }
 
   const env = { v: 1, path, signer: signer.name, epk: b64(epkDer), iv: b64(iv), tag: b64(tag), ct: b64(ct), keys };

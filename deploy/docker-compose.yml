@@ -1,0 +1,42 @@
+# Eyes Only server behind Caddy with automatic HTTPS (Let's Encrypt).
+#
+#   1. Point your domain's DNS at this host; open ports 80 and 443.
+#   2. echo "EYESONLY_DOMAIN=git.example.com" > .env       (next to this file)
+#   3. docker compose up -d
+#   4. docker compose run --rm eyesonly eyesonly-server init \
+#        --admin <your eyesonlypub1 card> --repo app.git --url https://git.example.com
+#
+# See README.md in this directory.
+name: eyesonly
+
+services:
+  eyesonly:
+    build: ..
+    image: eyesonly:local
+    restart: unless-stopped
+    volumes:
+      - eyesonly-data:/data
+    # Only Caddy talks to the server; it is never published on the host.
+    expose:
+      - "8787"
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - eyesonly
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      EYESONLY_DOMAIN: ${EYESONLY_DOMAIN:?set EYESONLY_DOMAIN (e.g. in deploy/.env) to the server's domain}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  eyesonly-data:
+  caddy-data:
+  caddy-config:

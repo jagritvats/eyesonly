@@ -90,6 +90,15 @@
     nav .links { display: none; }
     td:first-child { width: auto; }
   }
+  .code { position: relative; }
+  .code .copy { position: absolute; top: 10px; right: 10px; font: 12px var(--sans); padding: 4px 10px; border-radius: 6px;
+                border: 1px solid var(--line); background: var(--bg); color: var(--dim); cursor: pointer; }
+  .code .copy:hover { color: var(--text); }
+  h3.qs { font-size: 17px; margin: 28px 0 10px; }
+  .qs-note { color: var(--dim); font-size: 14px; margin: 12px 0 0; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 18px 0 0; }
+  .badges img { height: 20px; display: block; }
 </style>
 </head>
 <body>
@@ -110,8 +119,10 @@
       <a class="btn primary" href="#start">Get started</a>
       <a class="btn" href="#attacks">See what we tried to break</a>
       <a class="btn" href="https://github.com/jagritvats/eyesonly">GitHub</a>
+      <a class="btn" href="https://www.npmjs.com/package/eyesonly">npm</a>
     </div>
-    <div class="install">$ <code>npx eyesonly demo</code> · try it locally in 30s · zero dependencies · MIT · alpha</div>
+    <div class="badges"><a href="https://www.npmjs.com/package/eyesonly"><img alt="npm version" src="https://img.shields.io/npm/v/eyesonly?color=7ee0b5&amp;label=npm"></a> <a href="https://github.com/jagritvats/eyesonly/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jagritvats/eyesonly/actions/workflows/ci.yml/badge.svg"></a></div>
+    <div class="install">$ <code>npx eyesonly demo</code> · try it locally in 30s · zero dependencies · MIT · 450 attack tests</div>
 
     <div class="split" aria-label="Same repository, two developers">
       <div class="term">
@@ -164,7 +175,7 @@ a1f3…  refs/heads/main
     <p class="sub">The client is a convenience; the server is the security boundary. Each row below is a check
       in <code>npm test</code>, run against a real server with an attacker who controls their own git client.</p>
     <div class="score">
-      <div>452<small>adversarial e2e checks</small></div>
+      <div>507<small>adversarial e2e checks</small></div>
       <div>0<small>runtime dependencies</small></div>
       <div>3<small>common git-proxy footguns we test for</small></div>
     </div>
@@ -217,23 +228,39 @@ a1f3…  refs/heads/main
 
   <section id="start">
     <h2>Quickstart</h2>
-    <p class="sub">Five minutes on your own box. Production setups put the server behind TLS.</p>
-<div class="code"><span class="p"># server</span>
-eyesonly-server user add eyesonlypub1:eyJuYW1lIjoiYWxpY2Ui…   <span class="p"># prints alice's token</span>
-eyesonly-server repo create app.git --admin alice
-eyesonly-server policy set app.git policy.json
-eyesonly-server serve --port 8787
+    <p class="sub">Five minutes on your own box. Production setups put the server behind TLS.
+      Already have a repo? Skip to <a href="#existing">existing repos</a>.</p>
 
-<span class="p"># policy.json</span>
-{ "members":  ["*"],
-  "groups":   { "core": ["alice", "bob"] },
-  "files":    { ".env": ["@core"], "secrets/**": ["@core"] },
-  "branches": { "refs/heads/private/": ["@core"] } }
+    <h3 class="qs">1. Server</h3>
+<div class="code"><span class="p"># install once: npm i -g eyesonly   (Node 22+, git 2.40+, macOS / Linux / Windows)</span>
+eyesonly keygen alice                                     <span class="p"># the admin's own identity</span>
+eyesonly-server init --admin "$(eyesonly whoami | tail -1)" --repo app.git
+eyesonly-server serve --port 8787                          <span class="p"># init printed alice's token</span>
+<span class="p"># starter policy: @core reads .env and secrets/**, private/* branches are @core-only</span>
+<span class="p"># or with automatic HTTPS: docker compose up -d   (deploy/ in the repo)</span></div>
 
-<span class="p"># each developer</span>
-eyesonly keygen alice
+    <h3 class="qs">2. Each developer</h3>
+<div class="code">eyesonly keygen alice                 <span class="p"># send the printed card to your admin, get a token</span>
 eyesonly clone https://alice:&lt;token&gt;@git.example.com/app.git
 <span class="p"># ...then it's just git</span></div>
+
+    <h3 class="qs" id="existing">Already have a repo or a clone?</h3>
+<div class="code"><span class="p"># move a GitHub repo onto Eyes Only (GitHub stays as a second remote)</span>
+git remote rename origin github
+git remote add origin https://alice:&lt;token&gt;@git.example.com/app.git
+git push -u origin --all &amp;&amp; git push origin --tags
+eyesonly setup &amp;&amp; git add .gitattributes &amp;&amp; git commit -m "eyesonly" &amp;&amp; git push
+
+<span class="p"># teammate with an existing clone: pull first, then setup</span>
+git remote set-url origin https://bob:&lt;token&gt;@git.example.com/app.git
+git pull &amp;&amp; eyesonly setup</div>
+    <p class="qs-note">Secrets already committed in plaintext? The server rejects that history;
+      the guide shows how to rotate and strip it.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://jagritvats.github.io/eyesonly/docs/">Read the guides</a>
+      <a class="btn" href="https://jagritvats.github.io/eyesonly/docs/existing-repos/">Existing repos and clones</a>
+      <a class="btn" href="https://jagritvats.github.io/eyesonly/docs/troubleshooting/">Troubleshooting</a>
+    </div>
   </section>
 
   <section id="pricing">
@@ -251,5 +278,21 @@ eyesonly clone https://alice:&lt;token&gt;@git.example.com/app.git
 
   <footer>eyesonly. · per-user access control for git · <a href="#attacks">threat model</a> · MIT</footer>
 </div>
+<script>
+// Copy buttons for code blocks: copies the commands without the trailing "# ..." comments.
+document.querySelectorAll('.code').forEach((el) => {
+  const b = document.createElement('button');
+  b.className = 'copy'; b.type = 'button'; b.textContent = 'Copy';
+  b.addEventListener('click', async () => {
+    const text = [...el.childNodes].filter((n) => n !== b && !(n.classList && n.classList.contains('p')))
+      .map((n) => n.textContent).join('')
+      .split('\n').map((l) => l.replace(/\s+$/, '')).filter((l, i, a) => l || (i > 0 && a[i - 1])).join('\n').trim();
+    try { await navigator.clipboard.writeText(text + '\n'); b.textContent = 'Copied'; }
+    catch { b.textContent = 'Select and copy'; }
+    setTimeout(() => (b.textContent = 'Copy'), 1500);
+  });
+  el.appendChild(b);
+});
+</script>
 </body>
 </html>

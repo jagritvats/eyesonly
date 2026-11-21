@@ -1,9 +1,15 @@
 # Eyes Only
 
+[![npm](https://img.shields.io/npm/v/eyesonly?color=7ee0b5&label=npm)](https://www.npmjs.com/package/eyesonly)
+[![CI](https://github.com/jagritvats/eyesonly/actions/workflows/ci.yml/badge.svg)](https://github.com/jagritvats/eyesonly/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Homebrew](https://img.shields.io/badge/brew-jagritvats%2Ftap%2Feyesonly-orange)](https://github.com/jagritvats/homebrew-tap)
+
 ![Eyes Only: per-person access inside one git repo](https://raw.githubusercontent.com/jagritvats/eyesonly/main/assets/banner.png)
 
-> **Alpha, not independently audited.** Don't make it the only thing protecting production
-> secrets yet. [Threat model](THREAT_MODEL.md) · [Security policy](SECURITY.md)
+> **Built to be checked.** 450 adversarial end-to-end tests run against a real server, the
+> [threat model](THREAT_MODEL.md) maps every attack to the test that stops it, and the code is
+> small, dependency-free and open. Found a hole? [Report it](SECURITY.md).
 
 **Private files, private branches and built-in secrets in one git repo.** The server
 enforces it, and everyone keeps using the stock `git` client. Zero runtime dependencies
@@ -36,13 +42,14 @@ junior can't list, fetch (even by SHA over protocol v2) or push to `private/*`; 
 plaintext push is rejected by the server; and alice's accidental merge of private history
 into `main` is rejected while a squash merge goes through.
 
-Proof beyond the demo: `npm test` runs 452 adversarial end-to-end checks (9 suites) against
+Proof beyond the demo: `npm test` runs 507 adversarial end-to-end checks (10 suites) against
 a real server, with an attacker who controls their own git client.
 
 ## Install
 
 ```bash
-npm i -g eyesonly      # CLIs: eyesonly (also `git eyesonly`) and eyesonly-server
+npm i -g eyesonly      # https://www.npmjs.com/package/eyesonly · CLIs: eyesonly (also `git eyesonly`) and eyesonly-server
+brew install jagritvats/tap/eyesonly   # macOS / Linux, same CLIs
 ```
 
 Server in Docker: `docker build -t eyesonly . && docker run -p 8787:8787 -v eyesonly-data:/data eyesonly`.
@@ -55,17 +62,11 @@ and the demo on all three.
 ## Quickstart
 
 ```bash
-# --- server (behind TLS in production) ---
+# --- server, once (behind TLS in production; or `docker compose` in deploy/) ---
 export EYESONLY_DATA=/srv/eyesonly
-eyesonly-server user add "$(EYESONLY_HOME=~/.eyesonly eyesonly whoami | tail -1)"   # prints alice's token
-eyesonly-server repo create app.git --admin alice
-eyesonly-server policy set app.git - <<'EOF'
-{ "members": ["*"], "admins": ["alice"],
-  "groups":   { "core": ["alice", "bob"] },
-  "files":    { ".env": ["@core"], "secrets/**": ["@core"] },
-  "branches": { "refs/heads/private/": ["@core"] } }
-EOF
-eyesonly-server serve --port 8787
+eyesonly keygen alice            # the admin's own identity
+eyesonly-server init --admin "$(eyesonly whoami | tail -1)" --repo app.git --url https://git.example.com
+eyesonly-server serve --port 8787   # init printed alice's token and the next commands
 
 # --- every developer, once ---
 eyesonly keygen alice            # prints a public card: send it to the admin, get a token back
@@ -77,14 +78,21 @@ cd app && echo "STRIPE_SECRET=..." > .env && git add .env && git commit -m env &
 
 ### Already have a repo or a clone?
 
-| Situation | Commands |
-|---|---|
-| Move your GitHub repo onto Eyes Only | `git remote rename origin github && git remote add origin https://you:<token>@host/app.git && git push -u origin --all && eyesonly setup` |
-| Teammate with an existing clone | `git remote set-url origin https://you:<token>@host/app.git && git pull && eyesonly setup` (pull first) |
-| Commit the `.env` you've been gitignoring | remove it from `.gitignore`, then `git add .env && git commit && git push` |
+```bash
+# move a GitHub repo onto Eyes Only (GitHub stays as a second remote)
+git remote rename origin github
+git remote add origin https://alice:<token>@git.example.com/app.git
+git push -u origin --all && git push origin --tags
+eyesonly setup && git add .gitattributes && git commit -m "eyesonly" && git push
 
-Full walkthrough, including history that already contains a secret:
-[docs/existing-repos.md](docs/existing-repos.md).
+# teammate with an existing clone: pull first, then setup
+git remote set-url origin https://bob:<token>@git.example.com/app.git
+git pull && eyesonly setup
+```
+
+Secrets already committed in plaintext? The server rejects that history; see
+[existing repos and clones](docs/existing-repos.md) for rotating and stripping it.
+**[Read the guides →](https://jagritvats.github.io/eyesonly/docs/)**
 
 Day to day it's just git. `git diff` and `git log -p` show plaintext to people who can
 read a file, and `[eyesonly: encrypted, readable by …]` to everyone else. `git mv` of a secret
@@ -93,8 +101,12 @@ just works: the pre-commit hook installed by `eyesonly setup` re-seals it for it
 | Command | What it does |
 |---|---|
 | `eyesonly status` | Protected files, who can read them, and whether they need a rekey |
+| `eyesonly doctor` | Checks identity, remote, token storage, filters, hook and policy freshness; prints a fix for each problem |
+| `eyesonly setup --remote <name>` | Use a remote other than `origin` for the Eyes Only server (remembered), e.g. to keep GitHub as `origin` |
 | `eyesonly pull-policy && eyesonly rekey` | After the admin changes access: re-encrypt for the new audience |
 | `eyesonly audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
+| `eyesonly run -- <cmd>` | Run a command with your protected `.env` files as environment variables, decrypted from the committed blobs (`--file .env.production` to pick one; `eyesonly env` prints them) |
+| `EYESONLY_IDENTITY` | Your identity JSON (or base64 of it) from the environment instead of `~/.eyesonly`, for CI and containers. In GitHub Actions: `uses: jagritvats/eyesonly@v0.3` ([CI guide](docs/ci.md)) |
 | `eyesonly-server policy manifest app.git > m.json`, `eyesonly policy-sign m.json > s.json`, `eyesonly-server policy attest app.git s.json` | Admin signs the policy so a compromised server can't swap keys or add readers; clients pin the admin key on first contact (`EYESONLY_PIN_ADMIN=<fingerprint>` pins it up front) |
 
 ## Guides
@@ -203,7 +215,8 @@ eyesonly-server mirror show app.git        # config (credential path only) + wha
 1. **Client filter** (`clean`/`smudge`): protected paths are sealed with AES-256-GCM.
    The key is wrapped per reader with X25519, the envelope is signed with Ed25519, and the
    path is bound into the AAD. Unchanged plaintext reuses the existing ciphertext, so
-   there's no diff noise.
+   there's no diff noise. git runs it as one long-running filter process per command
+   (protocol v2, `clean` and `smudge` only, never `delay`), not one process per file.
 2. **Proxy** (`eyesonly-server serve`): authenticates tokens, hides refs per user, forces
    protocol v0 (v2 allows fetching hidden commits by SHA, as the test suite shows), and
    serves no dumb HTTP. It also filters fetch negotiation: `have`/`shallow` lines for
@@ -236,7 +249,8 @@ tests for both versions.
   profile's permissions. Anyone who can read it can read your secrets.
 - **jj and other git frontends** work for branches, but they don't run git's clean/smudge
   filters, so encrypted files need the git CLI for now.
-- **Not audited.** See [SECURITY.md](SECURITY.md) to report problems.
+- **No third-party audit yet.** Every defense has a test and the code is open; reports go
+  through [SECURITY.md](SECURITY.md) and get fixed first.
 
 ## Prior art
 
@@ -263,7 +277,11 @@ src/attest.mjs                      signed policy manifests + admin key pinning
 src/negotiate.mjs                   upload-pack negotiation filter
 src/hooks.mjs                       client pre-commit hook
 src/policy.mjs                      glob / ref / group matching
-src/client.mjs                      filters + developer commands
+src/client.mjs                      filters + developer commands (doctor, --remote)
+src/identity.mjs                    where the identity comes from (EYESONLY_IDENTITY or file)
+src/run.mjs                         eyesonly run / env (dotenv files into a process env)
+action.yml, action/setup.sh         GitHub Action: clone + decrypt in CI
+src/filterproc.mjs                  long-running filter process (git protocol v2)
 src/merge.mjs                       merge driver for protected files
 src/refguard.mjs                    protected refs, read-only members, rewind check
 src/attrs.mjs                       info/attributes pinning, server filter-redirect check

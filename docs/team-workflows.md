@@ -20,7 +20,7 @@ Admins change the signed policy on their own laptop; every change is a commit.
 | Give someone one path | `eyesonly grant <name> --files .env.production` (also adds a `.gitattributes` line) |
 | Make someone an admin | `eyesonly grant <name> --admin` |
 | Remove someone from a group | `eyesonly revoke <name> --group <g>` |
-| Remove someone entirely | `eyesonly revoke <name>`, then rotate what `eyesonly audit <name>` lists |
+| Remove someone entirely | `eyesonly offboard <name>`: revokes, re-encrypts, writes a rotation checklist ([Offboard someone](#offboard-someone)) |
 | New key for someone (lost key, new machine) | `eyesonly grant <name> --card <new card>` (prints `replacing <name>'s key ... readers must rekey`) |
 | See who can read what | `eyesonly policy show` |
 
@@ -229,44 +229,102 @@ read is an error, and the command doesn't run. For CI users, see [ci.md](ci.md).
 ## Rotate a secret (both modes)
 
 1. Get a new value from the provider (Stripe, AWS, ...).
-2. Edit the file, commit and push. The new ciphertext is sealed for the current policy.
-3. Revoke the old value at the provider. The old ciphertext is still in history.
+2. Put it in the file and stage it encrypted, without opening an editor:
+
+```bash
+eyesonly rotate .env STRIPE_SECRET=sk_live_new           # several KEY=value pairs at once is fine
+printf 'STRIPE_SECRET=sk_live_new\n' | eyesonly rotate .env --from-stdin   # keeps it out of shell history
+# .env: changed STRIPE_SECRET. Staged (encrypted); commit and push.
+```
+
+   `rotate` keeps comments, order and `export ` prefixes, adds keys that don't exist yet,
+   quotes values that need it, and only prints key names. It refuses files you can't write.
+   Editing the file by hand works too.
+3. Commit and push. The new ciphertext is sealed for the current policy.
+4. Revoke the old value at the provider. The old ciphertext is still in history.
+
+## Who could read a secret on a given date
+
+Every envelope records who it was encrypted for, so git history answers this in both modes:
+
+```bash
+eyesonly audit --file .env --at 2026-03-01
+# .env at 2026-03-01: version 3f2a1c09ab on origin/main
+#   introduced by 9b8c7d6e5f on 2026-02-10 12:00
+#   readable by: alice [1c4e9a02], bob [7d03f5b1]
+
+eyesonly audit --file .env --at v1.4.0      # a commit, tag or branch instead of a date
+eyesonly audit --file .env --at 2026-03-01 --all-refs   # every branch, not just the default one
+eyesonly audit --file .env --json           # for tooling
+```
+
+- A bare date means the end of that day (UTC). Without `--at`, it answers for now.
+- The bracketed id is the reader's key id; `old key` means the policy has a newer key for
+  that person since. Versions from before key ids existed say `no key id`.
+- Renames are followed: asking about `secrets/db-prod.txt` on a date before it was renamed
+  shows the version under its old name.
+
+The other direction, everything one person could ever decrypt:
+
+```bash
+eyesonly audit bob                          # every version, with first and last dates
+eyesonly audit bob --since 2026-03-01       # only versions readable on or after that date
+eyesonly audit bob --json
+```
+
+`audit` scans the refs in your clone, so fetch every branch first
+(`git fetch origin '+refs/heads/*:refs/remotes/origin/*'`). Versions committed in plaintext
+count as readable by everyone.
 
 ## Offboard someone
 
-**GitHub mode:** `eyesonly revoke bob`, commit, then steps 3 to 5 below. Also remove bob from
-the repo on your host; Eyes Only can't stop him reading what's still on it.
+`eyesonly offboard <name>` does the whole job in a clone where you can read the secrets:
 
-**Server:**
+```bash
+eyesonly offboard bob
+# [eyesonly] rotation checklist: .git/eyesonly/offboard-bob.md (2 file(s); key names only, no values)
+# [eyesonly] revoked bob: policy v7
+# [eyesonly] re-encrypted 2 file(s) for the current policy.
+# [eyesonly] next: git commit -m "eyesonly: offboard bob" && git push, then rotate what the checklist lists
+```
 
-1. Remove their access on the server:
+It asks before changing anything (`--yes` skips the prompt; without a terminal it's
+required). `--checklist <file>` writes the checklist somewhere else. The checklist lists
+each file bob could decrypt, when he last could, and for dotenv files every key name he saw,
+as checkboxes. It never contains values:
+
+```markdown
+## .env
+
+Last readable by bob: 2026-04-10 · 2 versions
+
+- [ ] STRIPE_SECRET
+- [ ] DB_PASS
+```
+
+Then rotate each item at its provider and commit the new values with `eyesonly rotate`.
+Revocation isn't retroactive: bob has seen what he could read.
+
+**GitHub mode:** `offboard` revokes bob in the signed policy, re-encrypts every protected
+file you can read, and stages both. Commit and push. Also remove bob from the repo on your
+host; Eyes Only can't stop him reading what's still there.
+
+**Server:** the server holds the policy, so it takes two runs:
+
+1. `eyesonly offboard bob` writes the checklist and, since bob is still in the server's
+   policy, prints what to run on the server:
 
 ```bash
 eyesonly-server user remove bob
-# removed bob. Run `eyesonly audit bob` in each repo and rotate what it lists.
+# if the repo has a signed policy, re-sign it:
+eyesonly-server policy manifest app.git > m.json && eyesonly policy-sign m.json > s.json && eyesonly-server policy attest app.git s.json
 ```
 
-Their token stops working right away, and they drop out of every audience.
-
-2. Remove their name from policies and groups, and `policy set`. Names of unregistered
-   users are ignored, but leaving them there means a new user registered as `bob` later
-   would inherit the access.
-3. In each repo, find what they could ever decrypt. Run this in a clone that has fetched
-   **every branch**, including private ones: `audit` only scans the refs you have locally.
-
-```bash
-git fetch origin '+refs/heads/*:refs/remotes/origin/*'
-eyesonly audit bob
-# bob could decrypt these protected files at some point. Rotate the secrets inside them:
-#   .env  (3 versions)
-```
-
-`audit` also counts versions that were committed in plaintext.
-
-4. Rotate every secret it lists ([Rotate a secret](#rotate-a-secret-both-modes)).
-5. Rekey so current ciphertext no longer names them (`eyesonly pull-policy && eyesonly rekey`),
-   commit and push. Rotation in step 4 already does this for the files you edit.
-6. If the policy is signed and they were in a file audience, re-sign it.
+   Removing the user stops their token right away and drops them from every audience.
+   Also take their name out of policies and groups (`policy set`); otherwise a new user
+   registered as `bob` later would inherit the access.
+2. Run `eyesonly offboard bob --yes` again. It pulls the policy, sees bob is gone and
+   re-encrypts for the remaining readers. Commit and push.
 
 ## Rotate a user's token (server)
 
@@ -335,6 +393,6 @@ Things to know:
   re-seals them, so do step 4 promptly.
 - Files only the lost key could read can't be recovered.
 - If the old key was lost or stolen, whoever has it can still read everything it could
-  decrypt before. Run `eyesonly audit <name>` and rotate what it lists.
+  decrypt before. Run `eyesonly offboard <name>` (or `eyesonly audit <name>`) and rotate what it lists.
 - To give one person several machines, copy `identity.json` to each (mode 0600). One key
   per user is all the server tracks today.

@@ -237,7 +237,7 @@ a1f3…  refs/heads/main
     <h2>What Eyes Only doesn't do</h2>
     <p class="sub">Security tools lose trust by over-claiming, so here are the limits. Details are in <code>THREAT_MODEL.md</code>.</p>
     <div class="limits">
-      <div><b>Revocation isn't retroactive</b><span>Someone who could read a secret has seen it. <code>eyesonly audit &lt;user&gt;</code> lists exactly what to rotate.</span></div>
+      <div><b>Revocation isn't retroactive</b><span>Someone who could read a secret has seen it. <code>eyesonly offboard &lt;user&gt;</code> re-encrypts and writes the rotation checklist.</span></div>
       <div><b>File names and timestamps are visible</b><span>Outsiders see that <code>.env</code> exists and when it changed, but not what's in it.</span></div>
       <div><b>GitHub mode detects, the server prevents</b><span>Without a server, a plaintext push from someone who skips the client is on the host until CI flags it. Rotate it.</span></div>
       <div><b>The server sees private branches</b><span>It never sees file plaintext, but private refs are ordinary objects on the server.</span></div>

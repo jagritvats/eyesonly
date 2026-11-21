@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+- `eyesonly audit --file <path> [--at <date|rev>] [--all-refs] [--json]`: who could read a file at a given moment, from the recipients (names and key ids) of the envelope version on the default branch (or every ref), plus the commit that introduced it. Follows renames across re-sealed envelopes.
+- `eyesonly audit <user>` now lists each version with first/last dates, takes `--since`/`--until`, and has `--json`.
+- `eyesonly offboard <user>`: revoke (GitHub mode) or print the server steps, re-encrypt what you can read, stage it, and write a rotation checklist with dotenv key names only.
+- `eyesonly rotate <file> KEY=value... | --from-stdin`: set dotenv keys in a protected file, keeping comments and order, and stage it encrypted. Prints key names only.
+
 ## 0.4.0 (2026-11-22)
 - Docs and website lead with GitHub mode (repo mode, no server) and present the server as the upgrade: new guides `docs/github-mode.md` and `docs/choosing-a-mode.md` (including moving from GitHub mode to the server), and both modes covered in existing-repos, CI, team workflows, troubleshooting and the policy reference.
 - Repo mode: Eyes Only without a server. The admin-signed policy lives in `.eyesonly/policy.json` and is read from the default branch only (version-monotonic, admin keys pinned on first use); any git host works. Same commands as server mode; `setup`, `clone` and `pull-policy` detect the mode (an Eyes Only server behind the remote always wins), and a clone never switches modes silently (`--mode` to switch). New: `eyesonly init`, `join`, `grant`, `revoke`, `policy show`. See docs/repo-mode.md.

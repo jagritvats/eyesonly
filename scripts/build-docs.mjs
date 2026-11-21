@@ -54,6 +54,7 @@ const SCENARIOS = [
   { label: 'Work on a private branch', in: 'team-workflows', match: /private branch/i },
   { label: 'Offboard someone', in: 'team-workflows', match: /offboard/i },
   { label: 'Rotate a secret', in: 'team-workflows', match: /rotate a secret/i },
+  { label: 'Who could read a secret on a date', in: 'team-workflows', match: /who could read a secret/i },
   { label: 'Lost a private key', in: 'team-workflows', match: /lost.*key/i },
   { label: 'Read secrets in CI', in: 'ci', match: /read secrets in ci|create a ci identity/i },
   { label: 'Run the server behind TLS', in: 'server-deployment', match: /tls|caddy|nginx/i },

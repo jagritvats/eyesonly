@@ -54,7 +54,7 @@ Pitch: **"git-crypt, but the server enforces it, plus private branches."**
 
 ## 4. MVP scope (this repo, v0.1)
 
-Shipped in v0.1 and covered by `test/e2e.sh` (47 adversarial checks; 422 across all suites as of v0.3):
+Shipped in v0.1 and covered by `test/e2e.sh` (47 adversarial checks; 436 across all suites as of v0.3):
 
 - `veil` client: `keygen`, `clone`, `setup`, `pull-policy`, `status`, `rekey`, `audit`,
   plus the clean/smudge/textconv filters (`git diff` shows plaintext to readers and a
@@ -74,7 +74,7 @@ transport, hosting a GitHub/GitLab-compatible API, SSO, key escrow, partial clon
 |---|---|---|
 | **0.1 MVP** (done) | Everything above | 47/47 e2e checks green |
 | **0.2 Trust the client, not the host** (done) | Admin-signed policy + client key pinning (vs. a lying server); have-negotiation oracle closed; pre-commit hook that rekeys on `git mv` / policy change | 200/200 checks across 4 suites |
-| **0.3 Safe in a real team's workflow** (done) | Protected refs + read-only members (no force-push/rewind to a stale secret, admins included); `filter=veil` pinned in `info/attributes` and redirected filters (LFS, nested `.gitattributes`) refused client- and server-side, `git worktree`/sparse-checkout fixed; merge driver that verifies, merges and re-seals encrypted files; outbound mirror to GitHub/GitLab from a sanitized staging repo | 422/436 checks across 9 suites |
+| **0.3 Safe in a real team's workflow** (done) | Protected refs + read-only members (no force-push/rewind to a stale secret, admins included); `filter=veil` pinned in `info/attributes` and redirected filters (LFS, nested `.gitattributes`) refused client- and server-side, `git worktree`/sparse-checkout fixed; merge driver that verifies, merges and re-seals encrypted files; outbound mirror to GitHub/GitLab from a sanitized staging repo | 436/436 checks across 9 suites, including post-merge security fixes |
 | **0.3.x Ergonomics** | Long-running filter protocol (`filter.<x>.process`) for speed; reuse SSH ed25519 keys (age-style); `veil grant/revoke` admin API over HTTP | Clone of a 10k-file repo < 2× plain git |
 | **0.4 Hosted mirror** (outbound mirror (manual/cron) shipped; inbound sync next) | Veil sits in front of GitHub/GitLab as a mirror: the private refs and the policy live in Veil, and the public refs are pushed through to GitHub so existing CI and PRs still work | One design partner running prod deploys through it |
 | **0.5 Teams** | Web dashboard: policy editor, audit log ("who could read STRIPE_KEY on 2026-03-01"), offboarding wizard that runs `audit` and opens rotation tasks | Paid pilot |

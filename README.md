@@ -48,6 +48,29 @@ just works: the pre-commit hook installed by `veil setup` re-seals it for its ne
 | `veil audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
 | `veil-server policy manifest app.git > m.json`, `veil policy-sign m.json > s.json`, `veil-server policy attest app.git s.json` | Admin signs the policy so a compromised server can't swap keys or add readers; clients pin the admin key on first contact (`VEIL_PIN_ADMIN=<fingerprint>` pins it up front) |
 
+## Protected refs and read-only members
+
+Every git host has branch protection; so does Veil. Both fields are optional:
+
+```json
+{ "members": ["*"], "admins": ["alice"],
+  "groups":  { "core": ["alice", "bob"], "release": ["alice"] },
+  "writers": ["@core", "ci-bot"],
+  "protect": { "refs/heads/main": { "push": ["@release"], "force": [], "delete": [] },
+               "refs/tags/":      { "force": [], "delete": [] } } }
+```
+
+- `writers` (default: `members`): everyone else is read-only. They can clone and fetch,
+  but pushes get a 403 from the proxy and `has read-only access` from the hook.
+- `protect`: longest prefix wins. A missing `push` means writers; a missing `force` or
+  `delete` means admins only. Without a `protect` section, tags and the branch HEAD points
+  to (usually `main`) can't be force-pushed or deleted by non-admins. Admins bypass
+  `protect`.
+- Nobody, admins included, can move a ref to a tree whose secrets are invalid under the
+  current policy. For example, force-pushing `main` back to a commit from before `veil rekey`
+  is refused with `encrypted to users outside the policy`. Neither field is ever sent to
+  clients.
+
 ## How it works
 
 1. **Client filter** (`clean`/`smudge`): protected paths are sealed with AES-256-GCM.

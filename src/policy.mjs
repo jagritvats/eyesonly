@@ -40,7 +40,7 @@ export function fileRule(policy, path) {
   return null;
 }
 
-function refMatches(prefix, ref) {
+export function refMatches(prefix, ref) {
   if (ref === prefix) return true;
   return prefix.endsWith('/') ? ref.startsWith(prefix) : ref.startsWith(prefix + '/');
 }

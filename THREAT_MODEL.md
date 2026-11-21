@@ -51,6 +51,11 @@ convenient; the server enforces.
 | 24 | A5 injects a recipient (or a signing key) into the unsigned part of the policy view | Clients encrypt only to, and accept envelope signatures only from, keys in the signed manifest; the server flags `attestation_stale` and the client warns | ✅ (test/attest.sh) |
 | 25 | A4 renames a protected file with `git mv` (stale path binding) | Pre-commit hook re-seals the envelope for the new path (refuses moves to unprotected paths); if the hook is bypassed the server still rejects the stale binding | ✅ (test/hooks.sh) |
 | 26 | A4/A1 stages plaintext or a stale-audience envelope | Pre-commit hook refuses plaintext and re-seals stale audiences before anything leaves the laptop (defense in depth; the server hook remains the boundary) | ✅ (test/hooks.sh) |
+| 30 | A1/A4 force-pushes (or fast-forwards) a ref to an existing commit whose `.env` is still encrypted to revoked A3 or holds an older secret | Hook (`src/refguard.mjs`): non-fast-forward updates of protected refs need `force` rights (default: admins only on the HEAD branch and tags), and every ref update's changed protected paths must be in the pusher's audience and pass envelope validation under the CURRENT policy, admins included. Branch creation validates blobs that differ from the HEAD branch | ✅ (test/refs.sh) |
+| 31 | A1 deletes the default branch or moves/deletes a release tag | Default protection without a `protect` section: tags and the branch HEAD points to get `force: []` and `delete: []` (admins only); any tag move counts as a force-push | ✅ (test/refs.sh) |
+| 32 | A read-only member (CI, auditor, contractor) pushes | `writers` (default: members; admins always write). The proxy returns 403 on receive-pack and the hook rejects `has read-only access` even when the proxy is bypassed | ✅ (test/refs.sh) |
+| 33 | A member not on a protected ref's list pushes or deletes it (including a private branch whose audience they are in) | `protect: { "<prefix>": { push, force, delete } }`, longest prefix wins; evaluated on every update before the deletion short-circuit | ✅ (test/refs.sh) |
+| 34 | A1 learns private ref names from `protect`/`writers` | The client policy view still emits only `files` and `keys` | ✅ (test/refs.sh) |
 
 ## Known limitations
 
@@ -70,7 +75,8 @@ These are stated plainly, because over-claiming is how security products lose tr
    unsigned repos are only warned about, and adding or rotating an admin needs a
    re-pin (re-clone, or delete `.git/veil/trust.json`).
 5. **Pre-receive cost.** The hook runs `ls-tree -r` per new commit; large monorepos
-   need path-filtered diffs (roadmap 0.2).
+   need path-filtered diffs (roadmap 0.2). Each ref update also runs one `diff-tree` between old and new tips and validates only
+   the protected paths that changed, so its cost is bounded by protected paths, not repo size.
 6. **Protocol v0 only.** That's a deliberate trade-off (see #8) and costs some fetch
    efficiency on very large repos.
 7. **Transport.** `veil-server` speaks plain HTTP. Deploy it behind TLS. Tokens are

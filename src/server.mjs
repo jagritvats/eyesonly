@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { expand, fileRule, refRule, isSubset } from './policy.mjs';
 import { filterUploadPackBody, DEFAULT_MAX_BODY } from './negotiate.mjs';
+import * as refguard from './refguard.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_CLI = path.resolve(HERE, '..', 'bin', 'veil-server.mjs');
@@ -51,6 +52,7 @@ function validatePolicy(p) {
     if (!b.startsWith('refs/')) throw new Error(`branch rule '${b}' must start with refs/`);
     arr(m, `branches["${b}"]`);
   }
+  refguard.validateRefPolicy(p);
   return p;
 }
 
@@ -244,6 +246,8 @@ function handle(req, res, opts) {
   const route = GIT_ROUTES.find((r) => r.method === req.method && r.re.test(rest));
   const service = route?.service(url.searchParams);
   if (!route || !['git-upload-pack', 'git-receive-pack'].includes(service)) return send(res, 404, 'not found\n');
+  // Early, friendly refusal for read-only members; the pre-receive hook is the real boundary.
+  if (service === 'git-receive-pack' && !refguard.canWrite(policy, user, all)) return send(res, 403, '[veil] read-only access\n');
 
   const hidden = Object.entries(policy.branches || {})
     .filter(([, who]) => !expand(policy, who, all).has(user))
@@ -462,10 +466,16 @@ function hookPreReceive() {
     }
   };
 
+  let headRef = null;
+  try {
+    headRef = g(['symbolic-ref', '-q', 'HEAD']) || null;
+  } catch {}
   for (const line of lines(fs.readFileSync(0, 'utf8'))) {
     const [oldOid, newOid, ref] = line.split(' ');
     const rule = refRule(policy, ref);
     if (rule && !expand(policy, rule.who, all).has(user)) reject(`'${user}' may not push to '${ref}'`);
+    const update = { policy, all, user, oldOid, newOid, ref, headRef, git: g, reject, validate: validateBlob };
+    refguard.checkRefRules(update);
     if (newOid === ZERO) continue;
 
     // 1. Visibility: commits newly reachable from `ref` must not come from a branch
@@ -484,6 +494,10 @@ function hookPreReceive() {
 
     // 2. Content: every commit new to the server is checked against file rules.
     for (const commit of lines(g(['rev-list', newOid, '--not', '--all']))) checkCommit(commit);
+
+    // 3. Ref update: the resulting tree is valid now, even if its commits already existed
+    //    (a force-push or fast-forward to an old commit still encrypted to a revoked user).
+    refguard.checkRefContent(update);
   }
 }
 

@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Eyes Only: private files, private branches and secrets for git</title>
 <meta name="description" content="Eyes Only adds per-user access control to git: encrypted files, invisible branches and built-in secrets, enforced by the server and compatible with stock git.">
+<meta property="og:title" content="Eyes Only: private files, private branches and secrets for git">
+<meta property="og:description" content="Per-person access inside one git repo. Enforced by the server, with the stock git client.">
+<meta property="og:image" content="https://jagritvats.github.io/eyesonly/assets/og.png">
+<meta property="og:url" content="https://jagritvats.github.io/eyesonly/">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://jagritvats.github.io/eyesonly/assets/og.png">
 <style>
   :root {
     --bg: #0b0d10; --bg2: #11151a; --line: #1f262e; --text: #e6e9ed; --dim: #8b96a3;
@@ -157,7 +164,7 @@ a1f3…  refs/heads/main
     <p class="sub">The client is a convenience; the server is the security boundary. Each row below is a check
       in <code>npm test</code>, run against a real server with an attacker who controls their own git client.</p>
     <div class="score">
-      <div>436<small>adversarial e2e checks</small></div>
+      <div>438<small>adversarial e2e checks</small></div>
       <div>0<small>runtime dependencies</small></div>
       <div>3<small>common git-proxy footguns we test for</small></div>
     </div>

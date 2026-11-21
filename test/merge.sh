@@ -4,6 +4,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_URL="$(node -e 'console.log(require("node:url").pathToFileURL(process.argv[1]).href)' "$ROOT")"
 SB="$(mktemp -d)"
 PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_EDITOR=true
@@ -30,7 +31,7 @@ in_() { local d="$1"; shift; (cd "$d" && "$@"); }
 # dec <file-path>: decrypt an envelope on stdin with the client's verifying tryOpen; prints signer= then plaintext
 cat > "$SB/dec.mjs" <<EOF
 import fs from 'node:fs';
-const { tryOpen, loadPolicy, loadIdentity } = await import('$ROOT/src/client.mjs');
+const { tryOpen, loadPolicy, loadIdentity } = await import('$ROOT_URL/src/client.mjs');
 const r = tryOpen(fs.readFileSync(0), process.argv[2], loadPolicy(), loadIdentity());
 if (r.error || !r.plaintext) { console.error(r.error || 'not a reader'); process.exit(1); }
 console.log('signer=' + r.env.signer);
@@ -181,7 +182,7 @@ as junior git merge --abort
 echo "== forged side"
 cd "$A"
 FORGED=$(node --input-type=module -e '
-const vc = await import(process.argv[1] + "/src/crypto.mjs");
+const vc = await import((await import("node:url")).pathToFileURL(process.argv[1]).href + "/src/crypto.mjs");
 const fs = await import("node:fs");
 const id = JSON.parse(fs.readFileSync(process.argv[2] + "/identity.json"));
 const pol = JSON.parse(fs.readFileSync(".git/eyesonly/policy.json"));
@@ -205,7 +206,7 @@ grep -q "can't merge '.env': theirs:" "$SB/out" && ok "refusal names the forged 
 cat > "$SB/scan.mjs" <<EOF
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-const { tryOpen, loadPolicy, loadIdentity } = await import('$ROOT/src/client.mjs');
+const { tryOpen, loadPolicy, loadIdentity } = await import('$ROOT_URL/src/client.mjs');
 const pol = loadPolicy(), id = loadIdentity();
 const objs = execFileSync('git', ['cat-file', '--batch-all-objects', '--batch-check=%(objectname) %(objecttype)'], { encoding: 'utf8' });
 for (const l of objs.split('\n').filter((l) => l.endsWith(' blob'))) {

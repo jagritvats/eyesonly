@@ -27,7 +27,7 @@
     "eyesonly-server": "bin/eyesonly-server.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "files": [
     "bin",

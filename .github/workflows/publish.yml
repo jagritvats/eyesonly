@@ -21,7 +21,13 @@ jobs:
       - run: npm test
       - name: Check tag matches package.json
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
-      - run: npm publish --access public
-      - run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+      - name: Publish (skipped if this version is already on npm, e.g. a manual first publish)
+        run: |
+          if npm view "eyesonly@$(node -p 'require("./package.json").version')" version >/dev/null 2>&1; then
+            echo "already published; skipping"
+          else
+            npm publish --access public
+          fi
+      - run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}

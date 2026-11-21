@@ -88,7 +88,7 @@ expect_reject "plaintext .env push (filters bypassed) is rejected" "may not modi
 git reset -q --hard origin/main
 # forge: a valid envelope signed by junior and encrypted to the whole team
 node --input-type=module -e '
-const vc = await import(process.argv[1] + "/src/crypto.mjs");
+const vc = await import((await import("node:url")).pathToFileURL(process.argv[1]).href + "/src/crypto.mjs");
 const fs = await import("node:fs");
 const id = JSON.parse(fs.readFileSync(process.argv[2] + "/identity.json"));
 const pol = JSON.parse(fs.readFileSync(".git/eyesonly/policy.json"));

@@ -118,7 +118,7 @@ expect_fail "staging repo pruned the plaintext blob after the refusal" git -C "$
 git -C "$R" update-ref refs/heads/main "$MAIN0"
 
 node --input-type=module -e '
-const vc = await import(process.argv[1] + "/src/crypto.mjs");
+const vc = await import((await import("node:url")).pathToFileURL(process.argv[1]).href + "/src/crypto.mjs");
 const fs = await import("node:fs");
 const id = JSON.parse(fs.readFileSync(process.argv[2] + "/identity.json"));
 fs.writeFileSync(process.argv[3], vc.seal({ plaintext: Buffer.from("API_URL=https://evil\n"), path: ".env", recipients: { junior: id.x25519.pub }, signer: id }));

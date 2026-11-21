@@ -155,7 +155,7 @@ C=$(post bob "$R/sh.priv" "$R/b.sh.priv")
 [[ "$C" == 200 ]] && ok "control: bob's shallow <private> request is forwarded" || bad "bob shallow request got $C"
 { pkt "want $MAIN"$'\n'; pkt "shallow $PRIV"$'\n'; printf 0000; } > "$R/shpriv"
 node --input-type=module -e '
-const { filterUploadPackBody } = await import(process.argv[1] + "/src/negotiate.mjs");
+const { filterUploadPackBody } = await import((await import("node:url")).pathToFileURL(process.argv[1]).href + "/src/negotiate.mjs");
 const fs = await import("node:fs");
 const body = fs.readFileSync(process.argv[3]);
 const j = await filterUploadPackBody({ body, gitDir: process.argv[2], hiddenPrefixes: ["refs/heads/private"] });
@@ -171,7 +171,7 @@ echo "== pass-through is byte-exact"
 { pkt "want $MAIN multi_ack_detailed no-done side-band-64k thin-pack ofs-delta agent=git/2.x"$'\n'; pkt "want $MAIN1"$'\n'
   pkt "deepen 3"$'\n'; printf 0000; pkt "have $MAIN1"$'\n'; printf 0000; pkt "done"$'\n'; } > "$R/caps.want"
 node --input-type=module -e '
-const { filterUploadPackBody } = await import(process.argv[1] + "/src/negotiate.mjs");
+const { filterUploadPackBody } = await import((await import("node:url")).pathToFileURL(process.argv[1]).href + "/src/negotiate.mjs");
 const fs = await import("node:fs");
 const out = await filterUploadPackBody({ body: fs.readFileSync(process.argv[3]), gitDir: process.argv[2], hiddenPrefixes: ["refs/heads/private"] });
 process.exit(out.equals(fs.readFileSync(process.argv[4])) ? 0 : 1);

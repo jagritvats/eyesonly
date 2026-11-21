@@ -85,7 +85,7 @@ if (Object.keys(m.keys).sort().join() !== "alice,bob,carol") throw new Error("ke
 ' "$SB/m1.json"
 check "manifest output is canonical JSON" js '
 const fs = await import("node:fs");
-const { canonical } = await import(process.argv[1] + "/src/attest.mjs");
+const { canonical } = await import((await import("node:url")).pathToFileURL(process.argv[1]).href + "/src/attest.mjs");
 const s = fs.readFileSync(process.argv[2], "utf8").trim();
 if (canonical(JSON.parse(s)) !== s) throw new Error("not canonical");
 ' "$SB/m1.json"
@@ -127,7 +127,7 @@ expect_reject "re-attesting the same version is rejected" "version must increase
 expect_out "next manifest is version 2" '"version":2' $VS policy manifest app.git
 
 echo "== first contact (TOFU) and out-of-band pinning"
-FP=$(js 'const a = await import(process.argv[1] + "/src/attest.mjs"); const fs = await import("node:fs");
+FP=$(js 'const a = await import((await import("node:url")).pathToFileURL(process.argv[1]).href + "/src/attest.mjs"); const fs = await import("node:fs");
 console.log(a.adminFingerprint(JSON.parse(fs.readFileSync(process.argv[2])).signer_ed25519));' "$SB/s1.json")
 expect_ok "alice clones the attested repo" as alice $EYESONLY clone "$(url alice)" "$SB/alice2"
 out_has "clone prints 'pinned admin alice <fingerprint>'" "pinned admin alice $FP"
@@ -234,7 +234,7 @@ expect_ok "mallory clones (her key is only in the unsigned view)" as mallory $EY
 expect_out "mallory can't read .env" "EYESONLY-V1" head -1 "$SB/mallory/.env"
 cd "$SB/mallory"
 js '
-const vc = await import(process.argv[1] + "/src/crypto.mjs");
+const vc = await import((await import("node:url")).pathToFileURL(process.argv[1]).href + "/src/crypto.mjs");
 const fs = await import("node:fs");
 const id = JSON.parse(fs.readFileSync(process.argv[2] + "/identity.json"));
 const pol = JSON.parse(fs.readFileSync(".git/eyesonly/policy.json"));
@@ -247,6 +247,20 @@ in_ "$SB/alice2" as alice git pull -q >"$SB/out" 2>&1
 out_has "alice's smudge refuses mallory's signature" "bad or unknown signature"
 expect_out "alice's working copy of .env stays EYESONLY-V1" "EYESONLY-V1" head -1 "$SB/alice2/.env"
 expect_fail "alice never sees the planted plaintext" grep -q evil "$SB/alice2/.env"
+
+echo "== A6: truncated GCM tags"
+# Node accepts 4-byte GCM tags unless authTagLength is pinned; open() must refuse them.
+TRUNC='
+const vc = await import((await import("node:url")).pathToFileURL(process.argv[1]).href + "/src/crypto.mjs");
+const a = vc.generateIdentity("alice");
+const env = vc.parse(vc.seal({ plaintext: Buffer.from("S=1"), path: ".env", recipients: { alice: a.x25519.pub }, signer: a }));
+const cut = (s, n) => Buffer.from(s, "base64").subarray(0, n).toString("base64");
+const bad = process.argv[2] === "content" ? { ...env, tag: cut(env.tag, 4) }
+  : { ...env, keys: { alice: { ...env.keys.alice, key: cut(env.keys.alice.key, 36) } } };
+try { vc.open(bad, a); process.exit(1); } catch (e) { if (!/malformed envelope/.test(e.message)) process.exit(2); }
+'
+check "open() refuses a 4-byte content tag" js "$TRUNC" content
+check "open() refuses a wrapped key with a 4-byte tag" js "$TRUNC" wrap
 
 echo "== existing suite"
 if bash "$ROOT/test/e2e.sh" >"$SB/e2e.out" 2>&1 && grep -q '^47 passed, 0 failed' "$SB/e2e.out"; then ok "test/e2e.sh: 47 passed"; else bad "test/e2e.sh"; tail -n 20 "$SB/e2e.out" | sed 's/^/        /'; fi

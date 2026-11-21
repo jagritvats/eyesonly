@@ -3,7 +3,7 @@
 Thanks for helping. A few rules keep a security tool trustworthy:
 
 1. **`npm test` must pass.** It runs every `test/*.sh` suite against a real local server.
-   You need Node ≥ 20, git ≥ 2.40, bash ≥ 4 and curl.
+   You need Node ≥ 22, git ≥ 2.40, bash ≥ 4 and curl.
 2. **Security fixes need an adversarial test that fails before the fix.** Follow the style in
    `test/e2e.sh`: `expect_reject` asserts the specific error message, so an attack can't
    "pass" by failing for an unrelated reason.

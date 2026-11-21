@@ -16,6 +16,12 @@ const MAGIC_BUF = Buffer.from(MAGIC);
 
 const b64 = (b) => Buffer.from(b).toString('base64');
 const unb64 = (s) => Buffer.from(s, 'base64');
+// Node accepts truncated GCM tags (down to 4 bytes) unless authTagLength is set.
+const GCM = { authTagLength: 16 };
+const tag16 = (t) => {
+  if (t.length !== 16) throw new Error('malformed envelope: bad auth tag length');
+  return t;
+};
 
 export const pubKey = (s) => crypto.createPublicKey({ key: unb64(s), format: 'der', type: 'spki' });
 export const privKey = (s) => crypto.createPrivateKey({ key: unb64(s), format: 'der', type: 'pkcs8' });
@@ -83,7 +89,7 @@ export function isEnvelope(buf) {
 export function seal({ plaintext, path, recipients, signer }) {
   const dek = crypto.randomBytes(32);
   const iv = crypto.randomBytes(12);
-  const c = crypto.createCipheriv('aes-256-gcm', dek, iv);
+  const c = crypto.createCipheriv('aes-256-gcm', dek, iv, GCM);
   c.setAAD(Buffer.from('eyesonly-v1\0' + path));
   const ct = Buffer.concat([c.update(plaintext), c.final()]);
   const tag = c.getAuthTag();
@@ -95,7 +101,7 @@ export function seal({ plaintext, path, recipients, signer }) {
     const rpkDer = unb64(recipients[name]);
     const shared = crypto.diffieHellman({ privateKey: eph.privateKey, publicKey: pubKey(recipients[name]) });
     const wiv = crypto.randomBytes(12);
-    const wc = crypto.createCipheriv('aes-256-gcm', kek(shared, epkDer, rpkDer), wiv);
+    const wc = crypto.createCipheriv('aes-256-gcm', kek(shared, epkDer, rpkDer), wiv, GCM);
     wc.setAAD(Buffer.from('eyesonly-wrap\0' + name));
     const wrapped = Buffer.concat([wc.update(dek), wc.final(), wc.getAuthTag()]);
     keys[name] = { iv: b64(wiv), key: b64(wrapped) };
@@ -130,13 +136,14 @@ export function open(env, identity) {
   if (!entry) return null;
   const shared = crypto.diffieHellman({ privateKey: privKey(identity.x25519.priv), publicKey: pubKey(env.epk) });
   const wrapped = unb64(entry.key);
-  const wd = crypto.createDecipheriv('aes-256-gcm', kek(shared, unb64(env.epk), unb64(identity.x25519.pub)), unb64(entry.iv));
+  if (wrapped.length !== 32 + 16) throw new Error('malformed envelope: bad wrapped key length');
+  const wd = crypto.createDecipheriv('aes-256-gcm', kek(shared, unb64(env.epk), unb64(identity.x25519.pub)), unb64(entry.iv), GCM);
   wd.setAAD(Buffer.from('eyesonly-wrap\0' + identity.name));
-  wd.setAuthTag(wrapped.subarray(wrapped.length - 16));
-  const dek = Buffer.concat([wd.update(wrapped.subarray(0, wrapped.length - 16)), wd.final()]);
+  wd.setAuthTag(wrapped.subarray(32));
+  const dek = Buffer.concat([wd.update(wrapped.subarray(0, 32)), wd.final()]);
 
-  const d = crypto.createDecipheriv('aes-256-gcm', dek, unb64(env.iv));
+  const d = crypto.createDecipheriv('aes-256-gcm', dek, unb64(env.iv), GCM);
   d.setAAD(Buffer.from('eyesonly-v1\0' + env.path));
-  d.setAuthTag(unb64(env.tag));
+  d.setAuthTag(tag16(unb64(env.tag)));
   return Buffer.concat([d.update(unb64(env.ct)), d.final()]);
 }

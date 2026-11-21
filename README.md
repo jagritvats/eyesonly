@@ -1,11 +1,13 @@
 # Eyes Only
 
+![Eyes Only: per-person access inside one git repo](https://raw.githubusercontent.com/jagritvats/eyesonly/main/assets/banner.png)
+
 > **Alpha, not independently audited.** Don't make it the only thing protecting production
 > secrets yet. [Threat model](THREAT_MODEL.md) · [Security policy](SECURITY.md)
 
 **Private files, private branches and built-in secrets in one git repo.** The server
 enforces it, and everyone keeps using the stock `git` client. Zero runtime dependencies
-(Node ≥ 20 + git).
+(Node ≥ 22 + git).
 
 ```
 alice$ cat .env          →  STRIPE_SECRET=sk_live_456
@@ -23,6 +25,8 @@ access to files and branches in the same repo, without a new VCS or client.
 
 ## Try it in 30 seconds
 
+![alice reads .env, junior gets ciphertext, junior's push is rejected by the server](https://raw.githubusercontent.com/jagritvats/eyesonly/main/assets/demo.gif)
+
 ```bash
 npx eyesonly demo      # temp dir, local server, alice vs junior; needs git, bash and curl
 ```
@@ -32,7 +36,7 @@ junior can't list, fetch (even by SHA over protocol v2) or push to `private/*`; 
 plaintext push is rejected by the server; and alice's accidental merge of private history
 into `main` is rejected while a squash merge goes through.
 
-Proof beyond the demo: `npm test` runs 436 adversarial end-to-end checks (9 suites) against
+Proof beyond the demo: `npm test` runs 438 adversarial end-to-end checks (9 suites) against
 a real server, with an attacker who controls their own git client.
 
 ## Install
@@ -42,7 +46,11 @@ npm i -g eyesonly      # CLIs: eyesonly (also `git eyesonly`) and eyesonly-serve
 ```
 
 Server in Docker: `docker build -t eyesonly . && docker run -p 8787:8787 -v eyesonly-data:/data eyesonly`.
-Put TLS in front of it either way.
+Put TLS in front of it either way, and a reverse proxy (Caddy, nginx) if you want rate
+limiting or request timeouts; the server has neither built in.
+
+The client runs on Linux, macOS and Windows (Git for Windows). The server is tested on
+Linux and macOS.
 
 ## Quickstart
 
@@ -201,6 +209,9 @@ tests for both versions.
   signed policy stops it from adding readers, but private refs are ordinary git objects on it.
 - **Admin trust is TOFU** unless you pin the admin key up front (`EYESONLY_PIN_ADMIN`).
 - **Protocol v0 only, plain HTTP.** Put TLS in front of the server.
+- **Your private key is a plain file.** `~/.eyesonly/identity.json` (mode 0600) isn't
+  passphrase-protected. On Windows, file modes aren't enforced, so it relies on your user
+  profile's permissions. Anyone who can read it can read your secrets.
 - **jj and other git frontends** work for branches, but they don't run git's clean/smudge
   filters, so encrypted files need the git CLI for now.
 - **Not audited.** See [SECURITY.md](SECURITY.md) to report problems.

@@ -8,6 +8,8 @@
 - Security: object-level visibility allowlist in the pre-receive hook (orphaned private commits, tags pointing at trees or blobs, tree entries naming hidden blobs); attribute checks on every commit that touches a protected path.
 - `eyesonly demo`: self-contained local demo.
 - Renamed from Veil to Eyes Only.
+- Crypto hardening: GCM auth tags must be exactly 16 bytes (Node otherwise accepts truncated tags).
+- Requires Node >= 22 (Node 20 is end-of-life). Test scripts run under Git for Windows.
 
 ## 0.2.0 (2026-11-21)
 - Admin-signed policy manifests and client-side admin key pinning, so a compromised server can't swap keys, add readers, roll back or downgrade the policy.

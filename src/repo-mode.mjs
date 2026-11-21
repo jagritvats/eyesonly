@@ -317,7 +317,7 @@ export async function cmdInit(args) {
     ? 'committed. Push it, then teammates run: eyesonly keygen <name> && eyesonly join (and send you the card)'
     : `next: git add ${rp.POLICY_FILE} .gitattributes && git commit -m "eyesonly: init" && git push`);
   log('teammates: eyesonly keygen <name>, clone, then `eyesonly join` and send you their card; you run `eyesonly grant <name>`');
-  log(`tip: protect the default branch and require \`eyesonly verify\` in CI (docs/repo-mode.md); members can pin ${fp} with EYESONLY_PIN_ADMIN`);
+  log(`tip: protect the default branch and require \`eyesonly verify\` in CI (docs/github-mode.md); members can pin ${fp} with EYESONLY_PIN_ADMIN`);
 }
 
 export function cmdJoin() {
@@ -386,7 +386,7 @@ export function cmdGrant(args) {
   if (fs.existsSync(reqPath)) fs.rmSync(reqPath);
   const readable = next.files.filter(([, who]) => who.includes(name)).map(([g]) => g);
   log(`granted ${name}${did.length ? ` (${did.join(', ')})` : ''}: policy v${next.version}. ${name} can read: ${readable.join(', ') || 'nothing yet'}`);
-  log(`next: git add ${rp.POLICY_FILE}${fs.existsSync(path.join(top, rp.REQUESTS_DIR)) ? ` ${rp.REQUESTS_DIR}` : ''} && git commit -m "eyesonly: grant ${name}", then \`eyesonly rekey\`, commit and push`);
+  log(`next: git add ${rp.POLICY_FILE}${o.files ? ' .gitattributes' : ''}${fs.existsSync(path.join(top, rp.REQUESTS_DIR)) ? ` ${rp.REQUESTS_DIR}` : ''} && git commit -m "eyesonly: grant ${name}", then \`eyesonly rekey\`, commit and push`);
 }
 
 export function cmdRevoke(args) {

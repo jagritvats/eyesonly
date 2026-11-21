@@ -143,6 +143,7 @@ pre-commit hook re-seals it for its new path.
 | `eyesonly init` · `join` · `grant` · `revoke` · `policy show` | GitHub mode: start, ask for access, give or remove it, see who can read what |
 | `eyesonly verify` | GitHub mode: check commits like the server would (pre-push hook and CI) |
 | `eyesonly setup --remote <name>` | Use a remote other than `origin` (remembered) |
+| `eyesonly identity move --to keychain` | Keep your private key in the OS keychain (macOS Keychain, Windows DPAPI, Linux Secret Service) instead of a file; `identity show` says where it is |
 | `EYESONLY_IDENTITY` | Your identity JSON (or base64 of it) from the environment, for CI and containers ([CI guide](docs/ci.md)) |
 | `eyesonly-server init` · `user add` · `user set-key` · `policy set` | Server: bootstrap, users, keys, policy ([deployment](docs/server-deployment.md)) |
 
@@ -302,9 +303,11 @@ tests for both versions.
 - **Admin trust is TOFU** unless you pin the admin key up front (`EYESONLY_PIN_ADMIN`).
 - **Protocol v0 only, plain HTTP.** Put TLS in front of the server, and a reverse proxy
   (Caddy, nginx) for rate limiting and timeouts; the server has neither built in.
-- **Your private key is a plain file.** `~/.eyesonly/identity.json` (mode 0600) isn't
-  passphrase-protected. On Windows, file modes aren't enforced, so it relies on your user
-  profile's permissions. Anyone who can read it can read your secrets.
+- **Your private key is a plain file by default.** `~/.eyesonly/identity.json` (mode 0600)
+  isn't passphrase-protected. `eyesonly keygen <name> --store keychain` (or
+  `eyesonly identity move --to keychain`) keeps it in the OS keychain instead: macOS
+  Keychain, Windows DPAPI or Linux Secret Service. Malware running as you can still ask the
+  keychain for it, as with any keychain secret.
 - **jj and other git frontends** work for branches, but they don't run git's clean/smudge
   filters, so encrypted files need the git CLI for now.
 - **No third-party audit yet.** Every defense has a test and the code is open; reports go

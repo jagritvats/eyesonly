@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
 import { installPreCommitHook, cmdPreCommit, HOOK_MARK } from './hooks.mjs';
+import * as ident from './identity.mjs';
 import { eyesonlyHome, identityPath, identitySource, readIdentity } from './identity.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
@@ -90,22 +91,64 @@ export function loadIdentity({ required = true } = {}) {
   } catch (e) {
     die(e.message);
   }
-  if (!id && required) die(`no identity at ${identityPath()}. Run: eyesonly keygen <your-name> (or set EYESONLY_IDENTITY)`);
+  if (!id && required) die(`no identity at ${identitySource()}. Run: eyesonly keygen <your-name> (or set EYESONLY_IDENTITY)`);
   return id;
 }
 
-function cmdKeygen([name]) {
-  if (!name) die('usage: eyesonly keygen <name>');
+function cmdKeygen(args) {
+  const { flags, rest } = takeFlags(args, ['store']);
+  const [name] = rest;
+  if (!name) die('usage: eyesonly keygen <name> [--store file|keychain]');
   if (!/^[a-z0-9][a-z0-9._-]{0,38}$/i.test(name)) die(`invalid name '${name}': use letters, digits, '.', '_' or '-' (max 39 characters), starting with a letter or digit`);
-  const p = identityPath();
-  if (fs.existsSync(p)) die(`identity already exists at ${p} (refusing to overwrite)`);
-  fs.mkdirSync(EYESONLY_HOME(), { recursive: true, mode: 0o700 });
+  const store = flags.store ?? 'file';
+  if (!['file', 'keychain'].includes(store)) die(`--store must be 'file' or 'keychain', not '${store}'`);
+  const existing = ident.existingIdentity();
+  if (existing) die(`identity already exists at ${existing} (refusing to overwrite)`);
   const id = vc.generateIdentity(name);
-  fs.writeFileSync(p, JSON.stringify(id, null, 2), { mode: 0o600 });
+  let where;
+  try {
+    where = ident.saveIdentity(id, store);
+  } catch (e) {
+    die(e.message);
+  }
   const card = vc.publicCard(id);
-  log(`created identity '${name}' (fingerprint ${vc.fingerprint(card)}) at ${p}`);
+  log(`created identity '${name}' (fingerprint ${vc.fingerprint(card)}) at ${where}`);
+  if (store === 'file') log('tip: `eyesonly identity move --to keychain` keeps it in your OS keychain instead of a file');
   log('send this public card to your server admin:');
   console.log(vc.encodeCard(card));
+}
+
+function cmdIdentity([sub, ...args]) {
+  if (sub === 'show') {
+    const id = loadIdentity({ required: false });
+    const env = !!process.env.EYESONLY_IDENTITY?.trim();
+    console.log(`store:       ${env ? 'EYESONLY_IDENTITY (environment)' : ident.configuredStore()}`);
+    console.log(`at:          ${identitySource()}`);
+    if (!id) return console.log('identity:    none. Run: eyesonly keygen <your-name>');
+    console.log(`name:        ${id.name}`);
+    console.log(`fingerprint: ${vc.fingerprint(vc.publicCard(id))}`);
+    return;
+  }
+  if (sub === 'move') {
+    const { flags } = takeFlags(args, ['to']);
+    if (!['file', 'keychain'].includes(flags.to)) die('usage: eyesonly identity move --to keychain|file');
+    let r;
+    try {
+      r = ident.moveIdentity(flags.to);
+    } catch (e) {
+      die(e.message);
+    }
+    if (!r.moved) return log(`identity '${r.id.name}' is already there: ${r.where}`);
+    return log(`moved identity '${r.id.name}' from the ${r.from} store to ${r.where} (read back and checked; the old copy is removed)`);
+  }
+  if (sub === 'export') {
+    if (!args.includes('--yes')) die('`eyesonly identity export` prints your private keys. Re-run with --yes to confirm (e.g. to paste into a CI secret)');
+    const id = loadIdentity();
+    log('warning: this is your private identity. Keep it only in a secret store (a CI secret), never in a repo or chat.');
+    console.log(ident.exportIdentity(id));
+    return;
+  }
+  die('usage: eyesonly identity show | move --to keychain|file | export --yes');
 }
 
 function cmdWhoami() {
@@ -735,9 +778,12 @@ async function cmdDoctor(args = []) {
   // identity
   const idr = await attempt(() => loadIdentity({ required: false }));
   const id = idr.value;
-  if (idr.error) fail(idr.error, `restore ${identityPath()} from a backup, or run eyesonly keygen and ask your admin to re-register you`);
-  else if (!id) fail(`no identity at ${identityPath()}`, 'eyesonly keygen <your-name>, then send the card to your admin (or set EYESONLY_HOME)');
-  else ok(`identity '${id.name}' at ${identityPath()}`);
+  if (idr.error) fail(idr.error, `restore ${identitySource()} from a backup, or run eyesonly keygen and ask your admin to re-register you`);
+  else if (!id) fail(`no identity at ${identitySource()}`, 'eyesonly keygen <your-name>, then send the card to your admin (or set EYESONLY_HOME)');
+  else ok(`identity '${id.name}' in ${identitySource()}`);
+  if (id && !process.env.EYESONLY_IDENTITY?.trim() && ident.configuredStore() === 'file') {
+    warn(`your private key is a plain file (${identityPath()})`, 'eyesonly identity move --to keychain');
+  }
 
   let top;
   try {
@@ -873,7 +919,10 @@ function cmdDemo() {
 const USAGE = `eyesonly: per-user access control for git
 
   eyesonly demo                run a self-contained local demo (temp dir, two users)
-  eyesonly keygen <name>       create your identity (~/.eyesonly/identity.json)
+  eyesonly keygen <name> [--store file|keychain]
+                               create your identity (file: ~/.eyesonly/identity.json)
+  eyesonly identity show | move --to keychain|file | export --yes
+                               where your identity lives; move it; print it for a CI secret
   eyesonly whoami              print your public card
   eyesonly clone <url> [dir]   clone an eyesonly repo and decrypt what you're allowed to read
   eyesonly setup [--remote <r>] [--mode repo|server]
@@ -900,7 +949,8 @@ repo mode (no server; the signed policy lives in .eyesonly/policy.json):
   eyesonly verify [<base> [<head>]] | --range <a>..<b>
                                check commits like the server would (CI and the pre-push hook)
 
-identity: EYESONLY_IDENTITY (JSON or base64 of it), else $EYESONLY_HOME/identity.json
+identity: EYESONLY_IDENTITY (JSON or base64 of it), else the store named in
+          $EYESONLY_HOME/config.json: the OS keychain, or $EYESONLY_HOME/identity.json
 
 internal (wired up by setup): filter-process | clean %f | smudge %f | textconv <file> | pre-commit | pre-push | merge-file`;
 
@@ -914,6 +964,7 @@ export async function main(argv) {
     demo: cmdDemo,
     keygen: cmdKeygen,
     whoami: cmdWhoami,
+    identity: cmdIdentity,
     clone: cmdClone,
     setup: cmdSetup,
     'pull-policy': cmdPullPolicy,

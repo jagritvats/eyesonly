@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Identity in the OS keychain: `eyesonly keygen <name> --store keychain` and `eyesonly identity move --to keychain|file` keep the private identity in the macOS Keychain, Windows DPAPI or Linux Secret Service instead of `~/.eyesonly/identity.json`. The key reaches the keychain tools on stdin only; moves are read back and compared before the old copy is removed; the long-running filter reads it once per git command. Also `eyesonly identity show` and `eyesonly identity export --yes` (base64 for `EYESONLY_IDENTITY`). `doctor` warns about a plain-file key. `EYESONLY_IDENTITY` still wins.
+
 ## 0.4.0 (2026-11-22)
 - Docs and website lead with GitHub mode (repo mode, no server) and present the server as the upgrade: new guides `docs/github-mode.md` and `docs/choosing-a-mode.md` (including moving from GitHub mode to the server), and both modes covered in existing-repos, CI, team workflows, troubleshooting and the policy reference.
 - Repo mode: Eyes Only without a server. The admin-signed policy lives in `.eyesonly/policy.json` and is read from the default branch only (version-monotonic, admin keys pinned on first use); any git host works. Same commands as server mode; `setup`, `clone` and `pull-policy` detect the mode (an Eyes Only server behind the remote always wins), and a clone never switches modes silently (`--mode` to switch). New: `eyesonly init`, `join`, `grant`, `revoke`, `policy show`. See docs/repo-mode.md.

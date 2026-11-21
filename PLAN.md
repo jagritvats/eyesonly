@@ -1,0 +1,105 @@
+# Veil: product plan
+
+> Git is all-or-nothing: clone access means you get every file and every branch.
+> Veil adds **private files, private branches and built-in secrets** to ordinary git
+> repos, and keeps them working with the stock `git` CLI, IDEs and CI.
+
+## 1. Problem
+
+Teams want three things that git's data model doesn't allow:
+
+| Need | What teams do today | Why it hurts |
+|---|---|---|
+| Keep `.env` / keys next to the code | Vault, Doppler, 1Password CLI, `sops`, `git-crypt` | Another vendor, another login, secrets drift away from the commit that needs them |
+| A branch only 3 people can see (stealth launch, security fix, M&A) | Fork into a separate private repo | History splits, rebasing between repos is painful, CI is set up twice |
+| Contractors and juniors on the main repo without prod secrets | Separate repos or "please don't look" | Either a lot of overhead or no real control |
+
+Git can't do this natively because a commit hashes its whole tree. You can't leave a
+file out for one user without changing the hash for everyone.
+
+## 2. Insight
+
+Split access control into **three layers that each work with stock git**:
+
+1. **Content layer** (client): a clean/smudge filter encrypts protected paths per
+   recipient. The tree stays identical for everyone; only the people the policy names
+   can read the blob.
+2. **Visibility layer** (server): an authenticating smart-HTTP proxy hides refs per
+   user (`transfer.hideRefs`), forces protocol v0 so hidden objects can't be fetched by
+   SHA, and refuses dumb HTTP.
+3. **Enforcement layer** (server): a pre-receive hook checks every incoming commit
+   against the server's copy of the policy. That rules out plaintext secrets,
+   unauthorized edits, forged or replayed ciphertext, and private history merged into
+   public branches.
+
+The client is a convenience. **The server is the security boundary.** A user who
+removes the client filter can't get anything onto the server that the policy forbids.
+
+## 3. Users and positioning
+
+- **Beachhead:** 5–50 engineer startups on self-hosted git, or anyone fed up with a
+  separate secrets manager for a handful of `.env` files.
+- **Expansion:** agencies and consultancies (client code plus contractors), open-core
+  companies (one repo, private enterprise directory), regulated teams (audit trail of
+  who could read which secret, and when).
+- **Alternatives:**
+  - *git-crypt / sops / transcrypt* encrypt files, but anyone can push plaintext and
+    nothing enforces who may write. They also have no private branches.
+  - *Separate repos* give real isolation, but history fragments.
+  - *GitHub/GitLab* permissions are per repo, not per path or branch read.
+  - *Vault / Doppler* do runtime secrets well, but they're a separate system that
+    drifts from the code.
+
+Pitch: **"git-crypt, but the server enforces it, plus private branches."**
+
+## 4. MVP scope (this repo, v0.1)
+
+Shipped and covered by `test/e2e.sh` (47 adversarial checks):
+
+- `veil` client: `keygen`, `clone`, `setup`, `pull-policy`, `status`, `rekey`, `audit`,
+  plus the clean/smudge/textconv filters (`git diff` shows plaintext to readers and a
+  placeholder to everyone else).
+- Crypto: X25519 + HKDF + AES-256-GCM envelopes, path-bound AAD, Ed25519 writer
+  signatures. Zero dependencies (Node ≥ 20 and git).
+- `veil-server`: users with hashed bearer tokens, repos, validated JSON policy,
+  smart-HTTP proxy with per-user ref hiding, pre-receive enforcement.
+- Landing page (`site/index.html`, also served at `/` by `veil-server serve`).
+
+Explicitly **out of MVP**: TLS termination (put Caddy/nginx in front), web UI, SSH
+transport, hosting a GitHub/GitLab-compatible API, SSO, key escrow, partial clone.
+
+## 5. Roadmap
+
+| Phase | Ships | Exit criterion |
+|---|---|---|
+| **0.1 MVP** (done) | Everything above | 47/47 e2e checks green |
+| **0.2 Ergonomics** | Long-running filter protocol (`filter.<x>.process`) for speed; reuse SSH ed25519 keys (age-style); `veil grant/revoke` admin API over HTTP; pre-commit hook that rekeys on `git mv` | Clone of a 10k-file repo < 2× plain git |
+| **0.3 Hosted mirror** | Veil sits in front of GitHub/GitLab as a mirror: the private refs and the policy live in Veil, and the public refs are pushed through to GitHub so existing CI and PRs still work | One design partner running prod deploys through it |
+| **0.4 Teams** | Web dashboard: policy editor, audit log ("who could read STRIPE_KEY on 2026-03-01"), offboarding wizard that runs `audit` and opens rotation tasks | Paid pilot |
+| **1.0** | SSO/SCIM groups → policy groups, hardware keys (WebAuthn PRF), CI identities with short-lived keys, SOC 2 | 10 paying teams |
+
+## 6. Business model
+
+- **Open source core** (MIT): client, server, hook. Trust requires being able to read the crypto.
+- **Veil Cloud**: hosted proxy/mirror, dashboard, audit log, SSO. $8/dev/month, free ≤ 5 devs.
+- **Enterprise**: self-hosted with SSO/SCIM, HSM-backed server keys, support.
+
+## 7. Go-to-market
+
+1. Launch as a reply to the "git is 100% or 0% access" discussion: a 60-second demo
+   (`npm test` printing 47 attacks being blocked) plus the threat model, written up
+   honestly, including the limitations.
+2. Show HN / r/programming: "We tried to break per-user git permissions. Here's what we
+   couldn't stop," led by the protocol-v2 SHA-fetch finding.
+3. Design partners: 5 startups currently paying for a secrets manager only for `.env` files.
+
+## 8. Risks
+
+| Risk | Mitigation |
+|---|---|
+| Crypto or protocol bug ⇒ loss of trust | Small, readable code; no custom primitives; an external audit before 1.0; adversarial tests in CI |
+| Git upstream changes `hideRefs` / protocol semantics | e2e suite pins behavior on every git release; proxy forces protocol v0 |
+| "Just use separate repos" inertia | Lead with the secrets use case (immediate value), then private branches |
+| Revocation can't be retroactive (they already saw it) | Be upfront about it: `veil audit` lists exactly what to rotate |
+
+See [THREAT_MODEL.md](THREAT_MODEL.md) for the adversarial analysis.

@@ -1,0 +1,423 @@
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { spawn, execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import * as vc from './crypto.mjs';
+import { expand, fileRule, refRule, isSubset } from './policy.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SERVER_CLI = path.resolve(HERE, '..', 'bin', 'veil-server.mjs');
+const SITE = path.resolve(HERE, '..', 'site');
+const DATA = () => path.resolve(process.env.VEIL_DATA || 'veil-data');
+const ZERO = '0'.repeat(40);
+const REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.git$/;
+
+const die = (msg) => {
+  console.error(`[veil-server] ${msg}`);
+  process.exit(1);
+};
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest();
+
+// ------------------------------------------------------------------ storage
+
+const usersFile = () => path.join(DATA(), 'users.json');
+function loadUsers() {
+  return fs.existsSync(usersFile()) ? JSON.parse(fs.readFileSync(usersFile(), 'utf8')).users : {};
+}
+function saveUsers(users) {
+  fs.mkdirSync(DATA(), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(usersFile() + '.tmp', JSON.stringify({ users }, null, 2), { mode: 0o600 });
+  fs.renameSync(usersFile() + '.tmp', usersFile());
+}
+const repoDir = (name) => path.join(DATA(), 'repos', name);
+const policyFile = (dir) => path.join(dir, 'veil.json');
+function loadPolicy(dir) {
+  return JSON.parse(fs.readFileSync(policyFile(dir), 'utf8'));
+}
+
+function validatePolicy(p) {
+  const arr = (v, what) => {
+    if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) throw new Error(`${what} must be a list of names`);
+  };
+  arr(p.members, 'members');
+  arr(p.admins || [], 'admins');
+  for (const [g, m] of Object.entries(p.groups || {})) arr(m, `groups.${g}`);
+  for (const [f, m] of Object.entries(p.files || {})) arr(m, `files["${f}"]`);
+  for (const [b, m] of Object.entries(p.branches || {})) {
+    if (!b.startsWith('refs/')) throw new Error(`branch rule '${b}' must start with refs/`);
+    arr(m, `branches["${b}"]`);
+  }
+  return p;
+}
+
+// ------------------------------------------------------------------- admin
+
+function newToken() {
+  return 'veil_' + crypto.randomBytes(24).toString('base64url');
+}
+
+function cmdUser([sub, arg]) {
+  const users = loadUsers();
+  if (sub === 'add') {
+    const card = vc.decodeCard(arg || '');
+    if (users[card.name]) die(`user '${card.name}' exists`);
+    const token = newToken();
+    users[card.name] = { x25519: card.x25519, ed25519: card.ed25519, tokenHash: sha256(token).toString('hex'), created: new Date().toISOString() };
+    saveUsers(users);
+    console.error(`added ${card.name} (fingerprint ${vc.fingerprint(card)}). Token, shown once:`);
+    console.log(token);
+  } else if (sub === 'token') {
+    if (!users[arg]) die(`no such user '${arg}'`);
+    const token = newToken();
+    users[arg].tokenHash = sha256(token).toString('hex');
+    saveUsers(users);
+    console.log(token);
+  } else if (sub === 'remove') {
+    if (!users[arg]) die(`no such user '${arg}'`);
+    delete users[arg];
+    saveUsers(users);
+    console.error(`removed ${arg}. Run \`veil audit ${arg}\` in each repo and rotate what it lists.`);
+  } else if (sub === 'list') {
+    for (const [n, u] of Object.entries(users)) console.log(`${n}\t${vc.fingerprint({ x25519: u.x25519, ed25519: u.ed25519 })}`);
+  } else die('usage: veil-server user add <veilpub1:...> | token <name> | remove <name> | list');
+}
+
+function installHook(dir) {
+  const hook = path.join(dir, 'hooks', 'pre-receive');
+  fs.writeFileSync(hook, `#!/bin/sh\nexec '${process.execPath}' '${SERVER_CLI}' hook pre-receive\n`, { mode: 0o755 });
+}
+
+function cmdRepo([sub, name, ...rest]) {
+  if (sub === 'create') {
+    if (!REPO_RE.test(name || '')) die('repo name must look like name.git');
+    const admin = rest[rest.indexOf('--admin') + 1];
+    if (!rest.includes('--admin') || !loadUsers()[admin]) die('usage: veil-server repo create <name.git> --admin <existing-user>');
+    const dir = repoDir(name);
+    if (fs.existsSync(dir)) die('repo exists');
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    execFileSync('git', ['init', '--quiet', '--bare', '-b', 'main', dir]);
+    execFileSync('git', ['config', '-f', path.join(dir, 'config'), 'http.getanyfile', 'false']);
+    installHook(dir);
+    const policy = { members: ['*'], admins: [admin], groups: {}, files: {}, branches: {} };
+    fs.writeFileSync(policyFile(dir), JSON.stringify(policy, null, 2));
+    console.error(`created ${dir}`);
+  } else if (sub === 'list') {
+    const root = path.join(DATA(), 'repos');
+    if (fs.existsSync(root)) fs.readdirSync(root).forEach((r) => console.log(r));
+  } else die('usage: veil-server repo create <name.git> --admin <user> | list');
+}
+
+function cmdPolicy([sub, name, file]) {
+  const dir = repoDir(name || '');
+  if (!REPO_RE.test(name || '') || !fs.existsSync(dir)) die('no such repo');
+  if (sub === 'show') return console.log(fs.readFileSync(policyFile(dir), 'utf8'));
+  if (sub === 'set') {
+    const raw = fs.readFileSync(file === '-' || !file ? 0 : file, 'utf8');
+    let p;
+    try {
+      p = validatePolicy(JSON.parse(raw));
+    } catch (e) {
+      die(`invalid policy: ${e.message}`);
+    }
+    fs.writeFileSync(policyFile(dir) + '.tmp', JSON.stringify(p, null, 2));
+    fs.renameSync(policyFile(dir) + '.tmp', policyFile(dir));
+    return console.error('policy updated. Members should run `veil pull-policy && veil rekey`.');
+  }
+  die('usage: veil-server policy show|set <name.git> [file|-]');
+}
+
+// ------------------------------------------------------------- HTTP proxy
+
+function authenticate(req, users) {
+  const h = req.headers.authorization || '';
+  if (!h.startsWith('Basic ')) return null;
+  const raw = Buffer.from(h.slice(6), 'base64').toString('utf8');
+  const i = raw.indexOf(':');
+  if (i < 1) return null;
+  const name = raw.slice(0, i);
+  const u = Object.hasOwn(users, name) ? users[name] : null;
+  // Always hash and compare so unknown users and wrong tokens take the same path.
+  const want = u ? Buffer.from(u.tokenHash, 'hex') : crypto.randomBytes(32);
+  const ok = crypto.timingSafeEqual(sha256(raw.slice(i + 1)), want);
+  return ok && u ? name : null;
+}
+
+function clientPolicy(repo, policy, users, user) {
+  const all = Object.keys(users);
+  const files = {};
+  const keys = {};
+  for (const [glob, who] of Object.entries(policy.files || {})) {
+    files[glob] = [...expand(policy, who, all)].filter((u) => users[u]).sort();
+    for (const u of files[glob]) keys[u] = { x25519: users[u].x25519, ed25519: users[u].ed25519 };
+  }
+  // Deliberately omits branch rules: their names would reveal private branches.
+  return { repo, user, files, keys };
+}
+
+function send(res, status, body, headers = {}) {
+  res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', ...headers });
+  res.end(body);
+}
+
+const GIT_ROUTES = [
+  { method: 'GET', re: /^\/info\/refs$/, service: (q) => q.get('service') },
+  { method: 'POST', re: /^\/git-upload-pack$/, service: () => 'git-upload-pack' },
+  { method: 'POST', re: /^\/git-receive-pack$/, service: () => 'git-receive-pack' },
+];
+
+function handle(req, res, opts) {
+  const url = new URL(req.url, 'http://veil.local');
+  if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+    const f = path.join(SITE, 'index.html');
+    if (fs.existsSync(f)) return send(res, 200, fs.readFileSync(f), { 'content-type': 'text/html; charset=utf-8' });
+  }
+  if (url.pathname === '/healthz') return send(res, 200, 'ok\n');
+
+  const m = url.pathname.match(/^\/([^/]+)(\/.*)$/);
+  if (!m || !REPO_RE.test(m[1])) return send(res, 404, 'not found\n');
+  const [, repo, rest] = m;
+  const dir = repoDir(repo);
+
+  const users = loadUsers();
+  const user = authenticate(req, users);
+  if (!user) return send(res, 401, 'authentication required\n', { 'www-authenticate': 'Basic realm="veil"' });
+  // Same 404 for "doesn't exist" and "not a member" so repo names don't leak.
+  if (!fs.existsSync(policyFile(dir))) return send(res, 404, 'not found\n');
+  const policy = loadPolicy(dir);
+  const all = Object.keys(users);
+  if (!expand(policy, policy.members, all).has(user)) return send(res, 404, 'not found\n');
+
+  if (req.method === 'GET' && rest === '/veil/policy') {
+    return send(res, 200, JSON.stringify(clientPolicy(repo, policy, users, user)), { 'content-type': 'application/json' });
+  }
+
+  // Only the smart protocol is served. Dumb HTTP (GET /objects/..., /HEAD, ...) would
+  // hand out any object by path and bypass ref hiding entirely.
+  const route = GIT_ROUTES.find((r) => r.method === req.method && r.re.test(rest));
+  const service = route?.service(url.searchParams);
+  if (!route || !['git-upload-pack', 'git-receive-pack'].includes(service)) return send(res, 404, 'not found\n');
+
+  const hidden = Object.entries(policy.branches || {})
+    .filter(([, who]) => !expand(policy, who, all).has(user))
+    .map(([prefix]) => prefix.replace(/\/$/, ''));
+
+  const cfg = [
+    ['http.receivepack', 'true'],
+    ['http.uploadpack', 'true'],
+    ['http.getanyfile', 'false'],
+    ['uploadpack.allowAnySHA1InWant', 'false'],
+    ['uploadpack.allowTipSHA1InWant', 'false'],
+    ['uploadpack.allowReachableSHA1InWant', 'false'],
+    ['uploadpack.allowFilter', 'false'],
+    ['uploadpack.allowRefInWant', 'false'],
+    ...hidden.map((h) => ['transfer.hideRefs', h]),
+  ];
+  const env = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    VEIL_DATA: DATA(),
+    VEIL_USER: user,
+    GIT_PROJECT_ROOT: path.join(DATA(), 'repos'),
+    GIT_HTTP_EXPORT_ALL: '1',
+    REMOTE_USER: user,
+    REQUEST_METHOD: req.method,
+    PATH_INFO: `/${repo}${rest}`,
+    QUERY_STRING: url.search.slice(1),
+    CONTENT_TYPE: req.headers['content-type'] || '',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_COUNT: String(cfg.length),
+  };
+  cfg.forEach(([k, v], i) => {
+    env[`GIT_CONFIG_KEY_${i}`] = k;
+    env[`GIT_CONFIG_VALUE_${i}`] = v;
+  });
+  if (req.headers['content-length']) env.CONTENT_LENGTH = req.headers['content-length'];
+  if (req.headers['content-encoding']) env.HTTP_CONTENT_ENCODING = req.headers['content-encoding'];
+  // Protocol v2 lets a client `want` any object the server has, ignoring hideRefs
+  // reachability rules. Forcing v0 keeps want-validation against advertised refs.
+  if (opts.allowV2 && req.headers['git-protocol']) env.GIT_PROTOCOL = req.headers['git-protocol'];
+
+  const child = spawn('git', ['http-backend'], { env });
+  req.pipe(child.stdin);
+  let head = Buffer.alloc(0);
+  let started = false;
+  child.stdout.on('data', (chunk) => {
+    if (started) return res.write(chunk);
+    head = Buffer.concat([head, chunk]);
+    const sep = head.indexOf('\r\n\r\n');
+    if (sep === -1) return;
+    started = true;
+    let status = 200;
+    const headers = {};
+    for (const line of head.subarray(0, sep).toString('utf8').split('\r\n')) {
+      const i = line.indexOf(':');
+      if (i < 0) continue;
+      const k = line.slice(0, i).trim();
+      const v = line.slice(i + 1).trim();
+      if (k.toLowerCase() === 'status') status = parseInt(v, 10);
+      else headers[k] = v;
+    }
+    res.writeHead(status, headers);
+    const rest2 = head.subarray(sep + 4);
+    if (rest2.length) res.write(rest2);
+  });
+  child.stderr.on('data', (d) => process.stderr.write(`[git ${user}@${repo}] ${d}`));
+  child.on('close', () => {
+    if (!started) send(res, 500, 'backend error\n');
+    else res.end();
+  });
+  req.on('aborted', () => child.kill());
+}
+
+function cmdServe(args) {
+  const port = Number(args[args.indexOf('--port') + 1] || process.env.PORT || 8787);
+  const host = args.includes('--host') ? args[args.indexOf('--host') + 1] : '127.0.0.1';
+  const opts = { allowV2: process.env.VEIL_ALLOW_PROTOCOL_V2 === '1' };
+  const server = http.createServer((req, res) => {
+    try {
+      handle(req, res, opts);
+    } catch (e) {
+      console.error(e);
+      if (!res.headersSent) send(res, 500, 'internal error\n');
+    }
+  });
+  server.listen(port, host, () => console.error(`[veil-server] listening on http://${host}:${port} (data: ${DATA()})`));
+}
+
+// ----------------------------------------------------------- pre-receive
+
+function hookPreReceive() {
+  const reject = (msg) => {
+    console.error(`\n[veil] REJECTED: ${msg}\n`);
+    process.exit(1);
+  };
+  const g = (args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 1 << 30 }).trim();
+  const gBuf = (args) => execFileSync('git', args, { maxBuffer: 1 << 30 });
+  const lines = (s) => s.split('\n').filter(Boolean);
+
+  const user = process.env.VEIL_USER;
+  const users = loadUsers();
+  if (!user || !users[user]) reject('push did not come through the veil server (no authenticated user)');
+  const policy = loadPolicy(process.cwd());
+  const all = Object.keys(users);
+  const members = expand(policy, policy.members, all);
+  if (!members.has(user)) reject(`'${user}' is not a member of this repository`);
+
+  const audience = (ref) => {
+    const r = refRule(policy, ref);
+    return r ? expand(policy, r.who, all) : members;
+  };
+  const refs = lines(g(['for-each-ref', '--format=%(objectname) %(refname)'])).map((l) => {
+    const [oid, ref] = l.split(' ');
+    return { oid, ref, aud: audience(ref) };
+  });
+
+  // --- tree checks, cached across commits
+  const treeCache = new Map();
+  const protectedEntries = (commit) => {
+    if (treeCache.has(commit)) return treeCache.get(commit);
+    const map = new Map();
+    for (const e of g(['ls-tree', '-r', '-z', commit]).split('\0').filter(Boolean)) {
+      const tab = e.indexOf('\t');
+      const [mode, type, oid] = e.slice(0, tab).split(' ');
+      const file = e.slice(tab + 1);
+      if (fileRule(policy, file)) map.set(file, { mode, type, oid });
+    }
+    treeCache.set(commit, map);
+    return map;
+  };
+  const validated = new Set();
+  const validateBlob = (commit, file, entry, allowed) => {
+    const key = `${entry.oid}\0${file}`;
+    if (validated.has(key)) return;
+    const at = `'${file}' in ${commit.slice(0, 8)}`;
+    if (entry.type !== 'blob' || entry.mode === '120000') reject(`${at} must be a regular encrypted file`);
+    const blob = gBuf(['cat-file', 'blob', entry.oid]);
+    if (!vc.isEnvelope(blob)) reject(`${at} is NOT encrypted. Refusing to store a plaintext secret. Run \`veil setup\` and recommit.`);
+    let env;
+    try {
+      env = vc.parse(blob);
+    } catch (e) {
+      reject(`${at}: ${e.message}`);
+    }
+    if (env.path !== file) reject(`${at} is encrypted for path '${env.path}'. Run \`veil rekey\` after renaming protected files.`);
+    if (!allowed.has(env.signer) || !users[env.signer] || !vc.verify(env, users[env.signer].ed25519)) {
+      reject(`${at} has an invalid signature or its signer '${env.signer}' may not write it`);
+    }
+    const recips = new Set(Object.keys(env.keys));
+    if (!isSubset(recips, allowed)) {
+      reject(`${at} is encrypted to users outside the policy: ${[...recips].filter((r) => !allowed.has(r)).join(', ')}. Run \`veil pull-policy && veil rekey\`.`);
+    }
+    const missing = [...allowed].filter((u) => !recips.has(u));
+    if (missing.length) console.error(`[veil] note: ${at} is not readable by ${missing.join(', ')} yet (veil rekey)`);
+    validated.add(key);
+  };
+  const checkCommit = (commit) => {
+    const parents = g(['rev-list', '--parents', '-n1', commit]).split(' ').slice(1);
+    const mine = protectedEntries(commit);
+    const theirs = parents.map(protectedEntries);
+    for (const [file, entry] of mine) {
+      if (theirs.length && theirs.some((t) => t.get(file)?.oid === entry.oid)) continue; // unchanged from a parent
+      const allowed = expand(policy, fileRule(policy, file), all);
+      if (!allowed.has(user)) reject(`'${user}' may not modify protected file '${file}' (${commit.slice(0, 8)})`);
+      validateBlob(commit, file, entry, allowed);
+    }
+    for (const t of theirs) {
+      for (const file of t.keys()) {
+        if (mine.has(file)) continue;
+        const allowed = expand(policy, fileRule(policy, file), all);
+        if (!allowed.has(user)) reject(`'${user}' may not delete protected file '${file}' (${commit.slice(0, 8)})`);
+      }
+    }
+  };
+
+  for (const line of lines(fs.readFileSync(0, 'utf8'))) {
+    const [oldOid, newOid, ref] = line.split(' ');
+    const rule = refRule(policy, ref);
+    if (rule && !expand(policy, rule.who, all).has(user)) reject(`'${user}' may not push to '${ref}'`);
+    if (newOid === ZERO) continue;
+
+    // 1. Visibility: commits newly reachable from `ref` must not come from a branch
+    //    whose audience is narrower than ref's audience (e.g. private -> main merge).
+    const target = audience(ref);
+    const ok = refs.filter((r) => isSubset(target, r.aud)).map((r) => r.oid);
+    const narrower = refs.filter((r) => !isSubset(target, r.aud)).map((r) => r.oid);
+    if (narrower.length) {
+      const fresh = lines(g(['rev-list', newOid, '--not', ...(oldOid !== ZERO ? [oldOid] : []), ...ok]));
+      if (fresh.length) {
+        const secret = new Set(lines(g(['rev-list', ...narrower, '--not', ...ok])));
+        const hit = fresh.find((c) => secret.has(c));
+        if (hit) reject(`pushing '${ref}' would expose commit ${hit.slice(0, 8)} from a branch with a narrower audience. Use \`git merge --squash\`.`);
+      }
+    }
+
+    // 2. Content: every commit new to the server is checked against file rules.
+    for (const commit of lines(g(['rev-list', newOid, '--not', '--all']))) checkCommit(commit);
+  }
+}
+
+// ------------------------------------------------------------------- main
+
+const USAGE = `veil-server: auth proxy + policy enforcement for veil repos   (data dir: $VEIL_DATA, default ./veil-data)
+
+  veil-server user add <veilpub1:...>          register a user, prints their access token
+  veil-server user token <name>                rotate a user's token
+  veil-server user remove <name>               offboard a user
+  veil-server user list
+  veil-server repo create <name.git> --admin <user>
+  veil-server repo list
+  veil-server policy show <name.git>
+  veil-server policy set <name.git> <file|->   replace the policy (validated)
+  veil-server serve [--port 8787] [--host 127.0.0.1]`;
+
+export async function main([cmd, ...rest]) {
+  if (cmd === 'user') return cmdUser(rest);
+  if (cmd === 'repo') return cmdRepo(rest);
+  if (cmd === 'policy') return cmdPolicy(rest);
+  if (cmd === 'serve') return cmdServe(rest);
+  if (cmd === 'hook' && rest[0] === 'pre-receive') return hookPreReceive();
+  console.error(USAGE);
+  process.exit(cmd ? 1 : 0);
+}

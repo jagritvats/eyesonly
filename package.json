@@ -1,0 +1,14 @@
+{
+  "name": "veil-git",
+  "version": "0.1.0",
+  "description": "Per-user access control for git: private files, private branches, built-in secrets. Works with stock git clients.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "veil": "bin/veil.mjs", "veil-server": "bin/veil-server.mjs" },
+  "engines": { "node": ">=20" },
+  "files": ["bin", "src", "site"],
+  "scripts": {
+    "test": "bash test/e2e.sh",
+    "serve": "node bin/veil-server.mjs serve"
+  }
+}

@@ -12,7 +12,7 @@ junior$ git push         →  [veil] REJECTED: 'junior' may not modify protected
 
 - **Plan:** [PLAN.md](PLAN.md). **Threat model:** [THREAT_MODEL.md](THREAT_MODEL.md).
 - **Website:** `site/index.html` (served at `/` by `veil-server serve`).
-- **Proof:** `npm test` runs 200 adversarial end-to-end checks (4 suites) against a real server.
+- **Proof:** `npm test` runs 422 adversarial end-to-end checks (8 suites) against a real server.
 
 ## Quickstart
 
@@ -161,6 +161,9 @@ src/crypto.mjs                      envelope format
 src/policy.mjs                      glob / ref / group matching
 src/client.mjs                      filters + developer commands
 src/merge.mjs                       merge driver for protected files
+src/refguard.mjs                    protected refs, read-only members, rewind check
+src/attrs.mjs                       info/attributes pinning, server filter-redirect check
+src/mirror.mjs                      outbound mirror to GitHub/GitLab
 src/server.mjs                      admin CLI, HTTP proxy, pre-receive hook
 test/e2e.sh                         adversarial suite
 site/index.html                     landing page

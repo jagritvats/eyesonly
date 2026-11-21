@@ -413,7 +413,7 @@ async function cmdSetup(args = []) {
   log(`ready (remote '${remote.name}'). ${files.length} protected file(s) in this checkout.`);
 }
 
-async function cmdPullPolicy(args = []) {
+export async function cmdPullPolicy(args = []) {
   const { flags } = takeFlags(args, ['remote', 'mode']);
   const top = repoTop();
   const rm = await repoMode();
@@ -662,7 +662,7 @@ async function cmdStatus() {
   }
 }
 
-function cmdRekey() {
+export function cmdRekey() {
   const policy = loadPolicy();
   const id = loadIdentity();
   const top = gitStr(['rev-parse', '--show-toplevel']);
@@ -673,32 +673,6 @@ function cmdRekey() {
   if (!files.length) return log('nothing to rekey');
   git(['add', '--renormalize', '--', ...files], { cwd: top, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, EYESONLY_RESEAL: '1' } });
   log(`re-encrypted ${files.length} file(s) for the current policy. Review with \`git status\` and commit.`);
-}
-
-function cmdAudit([user]) {
-  if (!user) die('usage: eyesonly audit <user>');
-  const policy = loadPolicy();
-  const seen = new Set();
-  const exposed = new Map();
-  for (const commit of gitStr(['rev-list', '--all']).split('\n').filter(Boolean)) {
-    for (const entry of gitStr(['ls-tree', '-r', '-z', commit]).split('\0').filter(Boolean)) {
-      const [meta, file] = entry.split('\t');
-      const oid = meta.split(' ')[2];
-      if (seen.has(oid) || !fileRule(policy, file)) continue;
-      seen.add(oid);
-      const blob = git(['cat-file', 'blob', oid]);
-      if (!vc.isEnvelope(blob)) {
-        exposed.set(file, (exposed.get(file) || 0) + 1);
-        continue;
-      }
-      try {
-        if (vc.parse(blob).keys[user]) exposed.set(file, (exposed.get(file) || 0) + 1);
-      } catch {}
-    }
-  }
-  if (!exposed.size) return console.log(`${user} never had access to any protected file in this history.`);
-  console.log(`${user} could decrypt these protected files at some point. Rotate the secrets inside them:`);
-  for (const [f, n] of exposed) console.log(`  ${f}  (${n} version${n > 1 ? 's' : ''})`);
 }
 
 // ------------------------------------------------------------------ doctor
@@ -884,7 +858,14 @@ const USAGE = `eyesonly: per-user access control for git
   eyesonly policy-sign <file>  (admin) sign a policy manifest from eyesonly-server policy manifest
   eyesonly status              list protected files and whether you can read them
   eyesonly rekey               re-encrypt your readable files for the current policy
-  eyesonly audit <user>        list secrets <user> could ever read (rotate them after offboarding)
+  eyesonly audit <user> [--since <date>] [--until <date>] [--json]
+                               every protected file version <user> could decrypt (rotate these)
+  eyesonly audit --file <path> [--at <date|rev>] [--all-refs] [--json]
+                               who could read <path> at that moment, from git history
+  eyesonly offboard <user> [--yes] [--checklist <out.md>]
+                               (admin) remove <user>, re-encrypt, write a rotation checklist
+  eyesonly rotate <file> KEY=value... | --from-stdin
+                               set dotenv keys in a protected file and stage it encrypted
   eyesonly run [--file <path>]... [--no-override] [--] <cmd> [args...]
                                run <cmd> with your protected .env files loaded into its environment
   eyesonly env [--file <path>]... [--format dotenv|json|shell]
@@ -920,7 +901,9 @@ export async function main(argv) {
     'policy-sign': (a) => attest.cmdPolicySign(a),
     status: cmdStatus,
     rekey: cmdRekey,
-    audit: cmdAudit,
+    audit: (a) => import('./audit.mjs').then((m) => m.cmdAudit(a)),
+    offboard: (a) => import('./audit.mjs').then((m) => m.cmdOffboard(a)),
+    rotate: (a) => import('./audit.mjs').then((m) => m.cmdRotate(a)),
     clean: cmdClean,
     smudge: cmdSmudge,
     textconv: cmdTextconv,

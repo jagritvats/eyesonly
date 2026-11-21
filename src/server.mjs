@@ -10,6 +10,7 @@ import * as vc from './crypto.mjs';
 import { expand, fileRule, refRule, isSubset } from './policy.mjs';
 import { filterUploadPackBody, DEFAULT_MAX_BODY } from './negotiate.mjs';
 import * as refguard from './refguard.mjs';
+import { contentChecker } from './validate.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_CLI = path.resolve(HERE, '..', 'bin', 'eyesonly-server.mjs');
@@ -534,68 +535,20 @@ function hookPreReceive() {
     return { oid, ref, aud: audience(ref) };
   });
 
-  // --- tree checks, cached across commits
-  const treeCache = new Map();
-  const protectedEntries = (commit) => {
-    if (treeCache.has(commit)) return treeCache.get(commit);
-    const map = new Map();
-    for (const e of g(['ls-tree', '-r', '-z', commit]).split('\0').filter(Boolean)) {
-      const tab = e.indexOf('\t');
-      const [mode, type, oid] = e.slice(0, tab).split(' ');
-      const file = e.slice(tab + 1);
-      if (fileRule(policy, file)) map.set(file, { mode, type, oid });
-    }
-    treeCache.set(commit, map);
-    return map;
-  };
-  const validated = new Set();
-  const validateBlob = (commit, file, entry, allowed) => {
-    const key = `${entry.oid}\0${file}`;
-    if (validated.has(key)) return;
-    const at = `'${file}' in ${commit.slice(0, 8)}`;
-    if (entry.type !== 'blob' || entry.mode === '120000') reject(`${at} must be a regular encrypted file`);
-    const blob = gBuf(['cat-file', 'blob', entry.oid]);
-    if (!vc.isEnvelope(blob)) reject(`${at} is NOT encrypted. Refusing to store a plaintext secret. Run \`eyesonly setup\` and recommit.`);
-    let env;
-    try {
-      env = vc.parse(blob);
-    } catch (e) {
-      reject(`${at}: ${e.message}`);
-    }
-    if (env.path !== file) reject(`${at} is encrypted for path '${env.path}'. Run \`eyesonly rekey\` after renaming protected files.`);
-    if (!allowed.has(env.signer) || !users[env.signer] || !vc.verify(env, users[env.signer].ed25519)) {
-      reject(`${at} has an invalid signature or its signer '${env.signer}' may not write it`);
-    }
-    const recips = new Set(Object.keys(env.keys));
-    if (!isSubset(recips, allowed)) {
-      reject(`${at} is encrypted to users outside the policy: ${[...recips].filter((r) => !allowed.has(r)).join(', ')}. Run \`eyesonly pull-policy && eyesonly rekey\`.`);
-    }
-    const current = Object.fromEntries([...recips].filter((u) => users[u]).map((u) => [u, users[u].x25519]));
-    const missing = [...[...allowed].filter((u) => !recips.has(u)), ...vc.staleRecipients(env, current)];
-    if (missing.length) console.error(`[eyesonly] note: ${at} is not readable by ${missing.join(', ')} yet (eyesonly rekey)`);
-    validated.add(key);
-  };
-  const checkCommit = (commit) => {
-    const parents = g(['rev-list', '--parents', '-n1', commit]).split(' ').slice(1);
-    attrs.checkCommitAttributes({ commit, parents, policy, git: g, reject, isAdmin: expand(policy, policy.admins || [], all).has(user) });
-    const mine = protectedEntries(commit);
-    const theirs = parents.map(protectedEntries);
-    for (const [file, entry] of mine) {
-      if (theirs.length && theirs.some((t) => t.get(file)?.oid === entry.oid)) continue; // unchanged from a parent
-      const allowed = expand(policy, fileRule(policy, file), all);
-      if (!allowed.has(user)) reject(`'${user}' may not modify protected file '${file}' (${commit.slice(0, 8)})`);
-      validateBlob(commit, file, entry, allowed);
-    }
-    for (const t of theirs) {
-      for (const file of t.keys()) {
-        if (mine.has(file)) continue;
-        const allowed = expand(policy, fileRule(policy, file), all);
-        if (!allowed.has(user)) reject(`'${user}' may not delete protected file '${file}' (${commit.slice(0, 8)})`);
-      }
-    }
-  };
-
   const isAdmin = expand(policy, policy.admins || [], all).has(user);
+  // --- content checks (shared with `eyesonly verify`), authorized by the pusher
+  const { validateBlob, checkCommit } = contentChecker({
+    policy,
+    users,
+    g,
+    gBuf,
+    reject,
+    isAdmin,
+    authorize: (kind, file, commit, allowed) => {
+      if (!allowed.has(user)) reject(`'${user}' may not ${kind} protected file '${file}' (${commit.slice(0, 8)})`);
+    },
+  });
+
   // Objects received in this push live in the quarantine dir until the hook accepts them.
   // Anything else this push references was already on the server.
   const notInQuarantine = (oids) => {

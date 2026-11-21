@@ -377,7 +377,7 @@ function cmdServe(args) {
       if (!res.headersSent) send(res, 500, 'internal error\n');
     }
   });
-  server.listen(port, host, () => console.error(`[eyesonly-server] listening on http://${host}:${port} (data: ${DATA()})`));
+  server.listen(port, host, () => console.error(`[eyesonly-server] listening on http://${host}:${server.address().port} (data: ${DATA()})`));
 }
 
 // ----------------------------------------------------------- pre-receive

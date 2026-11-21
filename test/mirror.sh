@@ -61,8 +61,8 @@ cat > "$SB/policy.json" <<'EOF'
 EOF
 sed 's#"refs/heads/private/": \["@core"\]#"refs/heads/private/": ["@core"], "refs/heads/release": ["@core"]#' "$SB/policy.json" > "$SB/policy-release-private.json"
 $VS policy set app.git "$SB/policy.json" 2>/dev/null
-$VS serve --port "$PORT" 2>"$SB/server.log" & SRV=$!
-for _ in $(seq 50); do curl -sf "$BASE/healthz" >/dev/null && break; sleep 0.1; done
+source "$ROOT/test/lib/server.sh"
+start_server PORT "$SB/server.log"; SRV=$LAST_SRV; BASE="http://127.0.0.1:$PORT"
 
 mkdir -p "$SB/alice" && cd "$SB/alice"
 git init -q -b main && git remote add origin "$(url alice)"

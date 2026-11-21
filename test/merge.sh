@@ -60,8 +60,8 @@ cat > "$SB/policy.json" <<'EOF'
   "files": { ".env": ["@core"], "secrets/**": ["@core"] } }
 EOF
 $VS policy set app.git "$SB/policy.json" 2>/dev/null
-$VS serve --port "$PORT" 2>"$SB/server.log" & SRV=$!
-for _ in $(seq 50); do curl -sf "$BASE/healthz" >/dev/null && break; sleep 0.1; done
+source "$ROOT/test/lib/server.sh"
+start_server PORT "$SB/server.log"; SRV=$LAST_SRV; BASE="http://127.0.0.1:$PORT"
 
 A="$SB/alice"; B="$SB/bob"; J="$SB/junior"
 mkdir -p "$A" && cd "$A"

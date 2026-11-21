@@ -61,9 +61,9 @@ cat > "$SB/policy.json" <<'EOF'
   "branches": { "refs/heads/private/": ["@core"] } }
 EOF
 $VS policy set app.git "$SB/policy.json" 2>/dev/null
-$VS serve --port "$PORT" 2>"$SB/server.log" & SRV=$!
-EYESONLY_MAX_UPLOAD_PACK_BODY=2000 $VS serve --port "$PORT2" 2>"$SB/server2.log" & SRV2=$!
-for _ in $(seq 50); do curl -sf "$BASE/healthz" >/dev/null && curl -sf "http://127.0.0.1:$PORT2/healthz" >/dev/null && break; sleep 0.1; done
+source "$ROOT/test/lib/server.sh"
+start_server PORT "$SB/server.log"; SRV=$LAST_SRV; BASE="http://127.0.0.1:$PORT"
+start_server PORT2 "$SB/server2.log" EYESONLY_MAX_UPLOAD_PACK_BODY=2000; SRV2=$LAST_SRV
 
 mkdir -p "$SB/alice" && cd "$SB/alice"
 git init -q -b main && git remote add origin "$(url alice)"

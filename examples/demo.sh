@@ -7,7 +7,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SB="$(mktemp -d)"
-PORT="${PORT:-$((20000 + RANDOM % 20000))}"
 export EYESONLY_DATA="$SB/server" GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 EO="node $ROOT/bin/eyesonly.mjs"
 EOS="node $ROOT/bin/eyesonly-server.mjs"
@@ -31,8 +30,14 @@ $EOS policy set app.git - 2>/dev/null <<'EOF'
   "files":    { ".env": ["@core"] },
   "branches": { "refs/heads/private/": ["@core"] } }
 EOF
-$EOS serve --port "$PORT" 2>"$SB/server.log" & SRV=$!
-for _ in $(seq 50); do curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null && break; sleep 0.1; done
+$EOS serve --port 0 2>"$SB/server.log" & SRV=$!   # OS picks a free port
+PORT=""
+for _ in $(seq 200); do
+  PORT=$(grep -o 'listening on http://127\.0\.0\.1:[0-9]*' "$SB/server.log" 2>/dev/null | grep -o '[0-9]*$' || true)
+  [[ -n "$PORT" ]] && curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null && break
+  PORT=""; sleep 0.05
+done
+[[ -n "$PORT" ]] || { echo "server did not start:" >&2; cat "$SB/server.log" >&2; exit 1; }
 printf '  policy: .env readable by @core (alice); refs/heads/private/* visible to @core only\n'
 
 step "alice commits code and a secret"

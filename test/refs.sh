@@ -51,8 +51,8 @@ for u in alice bob carol junior; do
 done
 $VS repo create app.git --admin alice 2>/dev/null
 policy
-$VS serve --port "$PORT" 2>"$SB/server.log" & SRV=$!
-for _ in $(seq 50); do curl -sf "$BASE/healthz" >/dev/null && break; sleep 0.1; done
+source "$ROOT/test/lib/server.sh"
+start_server PORT "$SB/server.log"; SRV=$LAST_SRV; BASE="http://127.0.0.1:$PORT"
 
 mkdir -p "$SB/alice" && cd "$SB/alice"
 git init -q -b main && git remote add origin "$(url alice)"

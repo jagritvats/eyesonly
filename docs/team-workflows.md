@@ -19,6 +19,8 @@ Admins change the signed policy on their own laptop; every change is a commit.
 | Put someone in a group | `eyesonly grant <name> --group <g>` |
 | Give someone one path | `eyesonly grant <name> --files .env.production` (also adds a `.gitattributes` line) |
 | Make someone an admin | `eyesonly grant <name> --admin` |
+| Let someone read but not write | `eyesonly grant <name> --read-only` (or `eyesonly revoke <name> --writer`); undo with `--writer` |
+| Register someone's SSH signing key (for `eyesonly verify --require-signed`) | `eyesonly grant <name> --ssh-signing-key ~/.ssh/id_ed25519.pub` (a key or a `.pub` path) |
 | Remove someone from a group | `eyesonly revoke <name> --group <g>` |
 | Remove someone entirely | `eyesonly offboard <name>`: revokes, re-encrypts, writes a rotation checklist ([Offboard someone](#offboard-someone)) |
 | New key for someone (lost key, new machine) | `eyesonly grant <name> --card <new card>` (prints `replacing <name>'s key ... readers must rekey`) |
@@ -351,9 +353,17 @@ eyesonly-server user token bob      # prints the new token; the old one stops wo
 
 ## Change the signing admin, or re-pin
 
-Clients pin the first admin who signed the policy. If another admin takes over signing, or
-a client says `refusing the server's policy: not signed by a pinned admin`, first confirm
-out of band that the change is real. Then, in each clone:
+Clients pin every admin a signed policy lists (server manifests list `admins` since 0.5;
+GitHub-mode policies always did), so any of them can sign the next version. Adding an admin
+works the same way: put them in `admins`, and sign with an admin clients already pinned; the
+new one is pinned from then on.
+
+`eyesonly whoami` prints your **admin pin** fingerprint (the one `EYESONLY_PIN_ADMIN` takes);
+`eyesonly policy show` and `eyesonly status` print what a clone pinned.
+
+Only if a client says `refusing the server's policy: not signed by a pinned admin` for a
+policy you know is real (an admin set that changed without a pinned admin signing it), first
+confirm out of band that the change is real. Then, in each clone:
 
 ```bash
 rm .git/eyesonly/trust.json

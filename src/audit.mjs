@@ -13,7 +13,7 @@ import readline from 'node:readline';
 import { execFileSync } from 'node:child_process';
 import * as vc from './crypto.mjs';
 import * as rp from './repo-policy.mjs';
-import { fileRule } from './policy.mjs';
+import { fileRule, writersOf } from './policy.mjs';
 import { cmdPullPolicy, cmdRekey, gitDir, loadIdentity, loadPolicy, repoTop } from './client.mjs';
 
 const log = (msg) => console.error('[eyesonly] ' + msg);
@@ -502,9 +502,10 @@ export function cmdRotate(args) {
   const policy = loadPolicy();
   const id = loadIdentity();
   const file = path.relative(top, path.resolve(fileArg)).split(path.sep).join('/');
-  const writers = fileRule(policy, file);
-  if (!writers) die(`'${file}' isn't a protected file in this repo's policy`);
-  if (!writers.includes(id.name)) die(`you can't write '${file}' (writers: ${writers.join(', ') || 'nobody'})`);
+  const readers = fileRule(policy, file);
+  if (!readers) die(`'${file}' isn't a protected file in this repo's policy`);
+  const writers = writersOf(policy, file);
+  if (!writers.includes(id.name)) die(`you can't write '${file}' (${readers.includes(id.name) ? 'read-only; ' : ''}writers: ${writers.join(', ') || 'nobody'})`);
   const abs = path.join(top, file);
   const current = fs.existsSync(abs) ? fs.readFileSync(abs) : Buffer.alloc(0);
   if (vc.isEnvelope(current) || vc.isCrlfEnvelope(current)) die(`'${file}' isn't decrypted in this checkout: run \`eyesonly setup\` first`);

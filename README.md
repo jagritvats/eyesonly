@@ -144,12 +144,16 @@ pre-commit hook re-seals it for its new path.
 | `eyesonly audit <user>` · `audit --file .env --at 2026-03-01` | Every version someone could decrypt; who could read a file on a given date |
 | `eyesonly rotate .env KEY=value` | Set dotenv keys in a protected file and stage it encrypted (`--from-stdin` keeps values out of shell history) |
 | `eyesonly init` · `join` · `grant` · `revoke` · `policy show` | GitHub mode: start, ask for access, give or remove it, see who can read what |
-| `eyesonly verify` | GitHub mode: check commits like the server would (pre-push hook and CI) |
+| `eyesonly grant <name> --read-only` · `--writer` | GitHub mode: read without write (`writers`), or undo it |
+| `eyesonly verify [--require-signed]` | GitHub mode: check commits like the server would (pre-push hook and CI); `--require-signed` also attributes changes to SSH commit signers (`grant <name> --ssh-signing-key`) |
+| `eyesonly migrate --to <server-url>` | Move a GitHub-mode repo onto a server after `eyesonly-server import`; pinned admin keys carry over |
+| `eyesonly whoami` | Your card, key fingerprint and admin-pin fingerprint (`EYESONLY_PIN_ADMIN`) |
 | `eyesonly branch push` · `pull` · `list` · `publish` · `delete` | GitHub mode: private branches (e.g. `private/*`) sealed on the host, squash-published when they ship ([guide](docs/github-mode.md#private-branches)) |
 | `eyesonly setup --remote <name>` | Use a remote other than `origin` (remembered) |
 | `eyesonly identity move --to keychain` | Keep your private key in the OS keychain (macOS Keychain, Windows DPAPI, Linux Secret Service) instead of a file; `identity show` says where it is |
 | `EYESONLY_IDENTITY` | Your identity JSON (or base64 of it) from the environment, for CI and containers ([CI guide](docs/ci.md)) |
 | `eyesonly-server init` · `user add` · `user set-key` · `policy set` | Server: bootstrap, users, keys, policy ([deployment](docs/server-deployment.md)) |
+| `eyesonly-server import <repo.git> --policy .eyesonly/policy.json` | Server: create a repo from a GitHub-mode policy (members, keys, rules) ([moving](docs/choosing-a-mode.md#move-from-github-mode-to-the-server)) |
 | `eyesonly admin --server <url> ...` | Server, from your machine: users, repos, grant/revoke, re-sign the policy over HTTPS with an admin token ([admin API](docs/admin-api.md)) |
 | `eyesonly-server audit-log [--verify]` | Server: who pushed, fetched, failed to log in or changed what, in a hash-chained log ([deployment](docs/server-deployment.md#audit-log)) |
 

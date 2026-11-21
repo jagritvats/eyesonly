@@ -40,6 +40,16 @@ export function fileRule(policy, path) {
   return null;
 }
 
+/**
+ * Who may write `path` in a resolved client policy: its audience, narrowed to the policy's
+ * `writers` when the cache carries them (repo mode). Null when no rule matches.
+ */
+export function writersOf(policy, path) {
+  const who = fileRule(policy, path);
+  if (!who) return null;
+  return Array.isArray(policy.writers) ? who.filter((u) => policy.writers.includes(u)) : who;
+}
+
 export function refMatches(prefix, ref) {
   if (ref === prefix) return true;
   return prefix.endsWith('/') ? ref.startsWith(prefix) : ref.startsWith(prefix + '/');

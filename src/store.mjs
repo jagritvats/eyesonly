@@ -301,11 +301,78 @@ export function attestationStatus(repo, dir, users = loadUsers()) {
 export const resignHint = (repo) =>
   `re-sign: eyesonly admin sign --repo ${repo}  (or on the server: eyesonly-server policy manifest ${repo} > m.json && eyesonly policy-sign m.json > s.json && eyesonly-server policy attest ${repo} s.json)`;
 
-/** The manifest an admin signs next (version = installed + 1). */
+// After `import`, the first server version must exceed the GitHub-mode policy's, so clones
+// that pinned admins in GitHub mode see the version go up, never down.
+export const importFile = (dir) => path.join(dir, 'eyesonly-import.json');
+export function importFloor(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(importFile(dir), 'utf8')).version || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** The manifest an admin signs next (version = installed + 1, and above any imported policy). */
 export function nextManifest(repo, dir, users = loadUsers()) {
   const installed = loadAttestation(dir);
-  const version = (installed?.manifest.version || 0) + 1;
+  const version = Math.max(installed?.manifest.version || 0, importFloor(dir)) + 1;
   return attest.buildManifest({ repo, policy: loadPolicy(dir), users, version });
+}
+
+/**
+ * GitHub mode -> server. Verify a repo's signed .eyesonly/policy.json, register its members
+ * with the keys it lists, and create the repo with the same rules (groups, files, writers,
+ * branches). The repo policy's signature can't be reused: a server manifest binds the server
+ * repo name and only the keys of file audiences, so an admin signs once more with the same
+ * key, and clones that pinned that admin in GitHub mode accept it without re-pinning.
+ * Returns { dir, manifest, rules, tokens: [[name, token]], existing: [names] }.
+ */
+export async function importRepo(name, attText, { adminCard = null, pin = null } = {}) {
+  if (!REPO_RE.test(name || '')) throw new OpError('repo name must look like name.git');
+  if (fs.existsSync(repoDir(name))) throw new OpError(`repo ${name} already exists; import only creates new repos`, 409);
+  const rp = await import('./repo-policy.mjs');
+  let m;
+  try {
+    const att = rp.parseAttestation(attText);
+    m = rp.resolveRepoPolicy(att, { trust: null, pin }).manifest;
+    if (adminCard) {
+      const card = parseCard(adminCard, 'admin card');
+      if (!m.policy.admins.includes(card.name) || m.keys[card.name]?.ed25519 !== card.ed25519 || m.keys[card.name]?.x25519 !== card.x25519) {
+        throw new Error(`'${card.name}' with that card is not an admin of this policy`);
+      }
+      if (att.signer !== card.name) throw new Error(`the policy is signed by '${att.signer}', not by '${card.name}'`);
+    }
+  } catch (e) {
+    throw new OpError(`can't import that policy: ${e.message}`, 422);
+  }
+  const rules = rp.rulesOf(m);
+  const users = loadUsers();
+  const fresh = [];
+  const existing = [];
+  for (const [u, k] of Object.entries(m.keys)) {
+    if (!Object.hasOwn(users, u)) fresh.push(u);
+    else if (users[u].x25519 !== k.x25519 || users[u].ed25519 !== k.ed25519) {
+      throw new OpError(`user '${u}' already exists on this server with a different key. Fix that first (eyesonly-server user set-key), then import again.`, 409);
+    } else existing.push(u);
+  }
+  const policy = {
+    members: rules.members,
+    admins: rules.admins,
+    groups: rules.groups,
+    files: rules.files,
+    branches: rules.branches || {},
+    ...(rules.writers !== undefined ? { writers: rules.writers } : {}),
+  };
+  try {
+    validatePolicy(policy);
+  } catch (e) {
+    throw new OpError(`the repo policy doesn't convert to a server policy: ${e.message}`, 422);
+  }
+  fs.mkdirSync(DATA(), { recursive: true, mode: 0o700 });
+  const tokens = fresh.map((u) => [u, addUser(users, { name: u, x25519: m.keys[u].x25519, ed25519: m.keys[u].ed25519 })]);
+  const dir = createRepo(name, policy);
+  fs.writeFileSync(importFile(dir), JSON.stringify({ from: m.repo, version: m.version, admins: rules.admins, imported: new Date().toISOString() }, null, 2));
+  return { dir, manifest: m, rules, tokens, existing };
 }
 
 /** Verify and install an admin-signed manifest. Returns the installed version. */

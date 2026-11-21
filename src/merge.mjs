@@ -16,7 +16,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as vc from './crypto.mjs';
-import { fileRule } from './policy.mjs';
+import { fileRule, writersOf } from './policy.mjs';
 import { tryOpen, loadPolicy, loadIdentity, recipientsFor } from './client.mjs';
 
 const log = (msg) => console.error('[eyesonly] ' + msg);
@@ -116,7 +116,7 @@ function mergeFile([O, A, B, P, L]) {
       `you are not a reader. Pick a side with \`git checkout --ours/--theirs -- ${P}\`, or ask one of: ${[...readers].sort().join(', ') || '(nobody)'}`
     );
   }
-  if (!allowed.includes(id.name)) refuse(`'${id.name}' may not write '${P}'`);
+  if (!allowed.includes(id.name) || !writersOf(policy, P).includes(id.name)) refuse(`'${id.name}' may not write '${P}' (read-only); pick a side with \`git checkout --ours/--theirs -- ${P}\``);
 
   const { ours, base, theirs } = Object.fromEntries(Object.entries(opened).map(([k, v]) => [k, v.plaintext]));
   if ([ours, base, theirs].some(isBinary)) refuse('binary content; pick a side');

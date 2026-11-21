@@ -155,6 +155,11 @@ export function privateRule(policy, name) {
   return refRule({ branches: policy.branches || {} }, name.startsWith('refs/') ? name : `refs/heads/${name}`);
 }
 
+/** Who may seal a branch under `rule`: its audience, narrowed to the policy's writers (read-only members only read). */
+export function branchWriters(policy, rule) {
+  return Array.isArray(policy.writers) ? rule.who.filter((u) => policy.writers.includes(u)) : rule.who;
+}
+
 const pinsPath = () => path.join(gitDir(), 'eyesonly', 'branches.json');
 function loadPins() {
   try {
@@ -211,7 +216,8 @@ function openVersion({ id, commit, env, size }, policy, identity) {
   if (!rule) throw new Error(`${at} claims to be '${header.name}', which isn't a private branch under the current policy`);
   const key = policy.keys?.[header.signer];
   if (!key || !headerSigOk(header, key.ed25519)) throw new Error(`${at} ('${header.name}'): bad or unknown writer signature (signer '${header.signer}')`);
-  if (!rule.who.includes(header.signer)) throw new Error(`${at} ('${header.name}') is signed by '${header.signer}', who may not write ${bare(rule.prefix)}* (allowed: ${rule.who.join(', ') || 'nobody'})`);
+  const writers = branchWriters(policy, rule);
+  if (!writers.includes(header.signer)) throw new Error(`${at} ('${header.name}') is signed by '${header.signer}', who may not write ${bare(rule.prefix)}* (allowed: ${writers.join(', ') || 'nobody'})`);
   if ((header.bundle ?? null) !== (bundle.length ? sha256(bundle) : null)) throw new Error(`${at} ('${header.name}'): the bundle doesn't match its signed hash`);
   return { id, commit, size, readable: true, header, bundle, recipients: Object.keys(env.keys) };
 }
@@ -355,7 +361,8 @@ function cmdPush(args) {
   if (!name) die('usage: eyesonly branch push [<branch>] (no branch checked out)');
   const rule = privateRule(policy, name);
   if (!rule) die(`'${name}' isn't a private branch: the policy's private prefixes are ${Object.keys(policy.branches || {}).map((p) => bare(p) + '*').join(', ') || '(none)'}. Push public branches with git push.`);
-  if (!rule.who.includes(id0.name)) die(`you ('${id0.name}') may not write ${bare(rule.prefix)}* (allowed: ${rule.who.join(', ') || 'nobody'})`);
+  if (!rule.who.includes(id0.name)) die(`you ('${id0.name}') may not write ${bare(rule.prefix)}* (allowed: ${branchWriters(policy, rule).join(', ') || 'nobody'})`);
+  if (!branchWriters(policy, rule).includes(id0.name)) die(`you ('${id0.name}') can read ${bare(rule.prefix)}* but not write it (read-only; writers: ${branchWriters(policy, rule).join(', ') || 'nobody'})`);
   const tip = tryG(['rev-parse', '--verify', '-q', `refs/heads/${name}^{commit}`], { cwd: top });
   if (!tip) die(`no local branch '${name}'`);
 
@@ -520,7 +527,7 @@ function cmdDelete(args) {
   const v = scan(top, remote, policy, id0).find((x) => x.readable && x.header.name === name);
   if (!v) die(`no sealed '${name}' you can read on ${remote}`);
   const rule = privateRule(policy, name);
-  if (!rule?.who.includes(id0.name)) die(`you may not write ${name}`);
+  if (!rule || !branchWriters(policy, rule).includes(id0.name)) die(`you may not write ${name}${rule?.who.includes(id0.name) ? ' (read-only)' : ''}`);
   const r = spawnSync('git', ['push', '--quiet', remote, `:${SEALED_NS}${v.id}`, `--force-with-lease=${SEALED_NS}${v.id}:${v.commit}`], { cwd: top, encoding: 'utf8' });
   if (r.status !== 0) die(`delete failed:\n${(r.stderr || '').trim()}`);
   tryG(['update-ref', '-d', TRACK_NS(remote) + v.id], { cwd: top });

@@ -71,11 +71,16 @@ Who may push. Default: everyone in `members`. Admins can always push. Anyone els
 `members` is read-only: they can clone and fetch, but pushes get HTTP 403
 `[eyesonly] read-only access` from the server, and the hook rejects them too.
 
+Writers are also the only people whose envelopes count: a protected file must be signed by
+someone in its audience **and** a writer, whoever pushes it. A read-only member in a file's
+audience can read it but not change it. GitHub mode has the same field
+([below](#github-mode-policy)).
+
 ### `files`
 
 `{ "glob": [principals] }`. Each matching path is encrypted to exactly those users. The
-same users are the only ones who may change or delete the file. For protected files,
-readers and writers are the same set.
+same users, minus anyone who isn't a writer, are the only ones who may change or delete the
+file. Without `writers`, readers and writers are the same set.
 
 Matching:
 
@@ -202,8 +207,10 @@ eyesonly-server policy attest app.git s.json
 # installed policy v1 signed by alice. Members pick it up with `eyesonly pull-policy`.
 ```
 
-Each manifest carries a version, one higher than the installed one. Clients refuse older
-versions, and refuse the same version with different content.
+Each manifest carries a version, one higher than the installed one (after
+`eyesonly-server import`, one higher than the GitHub-mode policy's). Clients refuse older
+versions, and refuse the same version with different content. The manifest also lists every
+admin and their signing key (`admins`), so clients pin all of them.
 
 ### Re-sign after every change to files or keys
 
@@ -220,17 +227,17 @@ A new teammate won't be able to read until you do.
 ### Pinning
 
 On first contact (`eyesonly clone`, or `eyesonly setup` in a clone without trust state), a
-client pins the admin who signed, in `.git/eyesonly/trust.json`, and prints:
+client pins every admin the signed manifest lists, in `.git/eyesonly/trust.json`, and prints:
 
 ```
-[eyesonly] pinned admin alice 67e9:46a6:0bf6:44a7
+[eyesonly] pinned admins alice 67e9:46a6:0bf6:44a7, bob 1048:0820:8872:99c1
 ```
 
-From then on it refuses unsigned policies, other signers, and older versions.
+From then on it refuses unsigned policies, signers it didn't pin, and older versions.
 
-- **Only the admin who signed first is pinned.** A policy signed later by a second admin is
-  refused with `not signed by a pinned admin`. Have one admin do the signing, or have every
-  client delete `.git/eyesonly/trust.json` and re-pin after a handover.
+- **Every listed admin is pinned**, so any of them can sign the next version. A version signed
+  by a pinned admin may change the admin list; the clients then pin the new list. (Manifests
+  signed before 0.5 have no `admins` list: only their signer is pinned. Re-sign once.)
 - **Once a repo is signed, it stays signed.** Clients refuse an unsigned policy afterwards.
 - **Pin up front** to skip trust-on-first-use. Set `EYESONLY_PIN_ADMIN` to the admin's
   policy fingerprint when cloning:
@@ -239,14 +246,15 @@ From then on it refuses unsigned policies, other signers, and older versions.
 EYESONLY_PIN_ADMIN=67e9:46a6:0bf6:44a7 eyesonly clone https://alice@git.example.com/app.git
 ```
 
-This fingerprint is **not** the one `eyesonly whoami` prints. It's derived from the admin's
-signing key only. The admin can print it with:
+It's the **admin pin** line of `eyesonly whoami` (derived from the signing key only; the
+other fingerprint `whoami` prints is the key fingerprint `user list` shows):
 
-```bash
-node -e 'const c=require("crypto"),f=require("fs");const id=JSON.parse(f.readFileSync(process.argv[1]));console.log(c.createHash("sha256").update(id.ed25519.pub).digest("hex").slice(0,16).match(/.{4}/g).join(":"))' ~/.eyesonly/identity.json
+```
+alice  5b1c:9a0e:...  (key fingerprint: user list, policy show members)
+admin pin  67e9:46a6:0bf6:44a7  (what members compare, or set as EYESONLY_PIN_ADMIN, if you sign policies)
 ```
 
-Or copy it from the `pinned admin` line of their own first clone. Share it out of band.
+Share it out of band. `eyesonly policy show` and `eyesonly status` print what a clone pinned.
 
 ### Signing errors
 
@@ -268,10 +276,11 @@ In GitHub mode the policy is committed as `.eyesonly/policy.json`: a manifest si
 admin, holding
 
 - `policy`: the rules as written, with the same meaning as above: `members`, `admins`,
-  `groups` and `files` (`writers`, `protect` and `branches` don't exist here; use your host's
-  branch protection);
+  `groups`, `files` and the optional `writers` (set with `eyesonly grant <name> --read-only` /
+  `--writer`; `protect` and `branches` don't exist here, use your host's branch protection);
 - `files`: each glob expanded to its readers, in rule order (first match wins);
-- `keys`: every member's public keys;
+- `keys`: every member's public keys, plus an optional `ssh_signing` key used by
+  `eyesonly verify --require-signed`;
 - `repo` (a random id made by `init`) and `version`, which only goes up.
 
 Don't edit it by hand: the signature would no longer match and every client would refuse it.

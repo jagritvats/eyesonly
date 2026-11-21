@@ -12,7 +12,14 @@
 //
 // What it can't know without a server: who pushed. Changes are attributed to envelope
 // signers (a forged or unauthorized envelope fails), and deletions are reported, not refused.
+//
+// --require-signed: every commit must carry a valid SSH signature by a member whose
+// `ssh_signing` key is in the policy that applies to that commit (git's own
+// gpg.ssh.allowedSignersFile check). Protected-file edits and deletions are then attributed
+// to that signer and refused unless they may write the file.
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import * as attest from './attest.mjs';
 import * as rp from './repo-policy.mjs';
@@ -50,11 +57,31 @@ function checkSuccessor(att, prev) {
   return m;
 }
 
+/** An allowed-signers file (git's gpg.ssh.allowedSignersFile format) for a manifest's members. */
+function allowedSigners(m, dir) {
+  const lines = Object.entries(m.keys)
+    .filter(([, k]) => typeof k.ssh_signing === 'string')
+    .map(([name, k]) => `${name} namespaces="git" ${k.ssh_signing}`);
+  const file = path.join(dir, `${attest.manifestHash(m).slice(0, 16)}.signers`);
+  fs.writeFileSync(file, lines.join('\n') + (lines.length ? '\n' : ''));
+  return { file, count: lines.length };
+}
+
+/** The member who signed `commit` per `signersFile`, or { error }. */
+function commitSigner(commit, signersFile, cwd) {
+  const out = tryGit(['-c', `gpg.ssh.allowedSignersFile=${signersFile}`, 'log', '-1', '--format=%G?%x00%GS', commit], cwd);
+  if (out == null) return { error: "couldn't check the signature (is ssh-keygen installed?)" };
+  const [status, principal] = out.split('\0');
+  if (status === 'G' && principal) return { who: principal };
+  const why = { N: 'not signed', U: 'signed with a key that is not in the policy', B: 'bad signature', E: "signature can't be checked", X: 'expired signature', Y: 'signed with an expired key', R: 'signed with a revoked key' }[status] || `signature status ${status}`;
+  return { error: why };
+}
+
 /**
  * Verify the commits reachable from `head` and not from `base` / `exclude`.
  * Returns { errors, notes, checked, policy } (policy: false when no policy applies at all).
  */
-export function verifyRange({ base = null, head = 'HEAD', exclude = [], cwd = process.cwd() } = {}) {
+export function verifyRange({ base = null, head = 'HEAD', exclude = [], cwd = process.cwd(), requireSigned = false } = {}) {
   const { g, gBuf } = gitRunner(cwd);
   const errors = [];
   const notes = [];
@@ -82,26 +109,34 @@ export function verifyRange({ base = null, head = 'HEAD', exclude = [], cwd = pr
     }
   }
 
+  let signedBy = null; // --require-signed: the member who signed the commit being checked
   const checkers = new Map();
   const checkerFor = (oid) => {
     if (!checkers.has(oid)) {
       const m = accepted.get(oid);
+      const rules = rp.rulesOf(m);
+      const writers = rp.effectiveWriters(rules, Object.keys(m.keys));
       checkers.set(oid, contentChecker({
-        policy: rp.rulesOf(m),
+        policy: rules,
         users: m.keys,
+        writers,
         g,
         gBuf,
         reject: (msg) => {
           throw new Rejection(msg);
         },
-        authorize: (kind, file, commit) => {
-          if (kind === 'delete') notes.push(`'${file}' deleted in ${commit.slice(0, 8)} (who did it can't be checked without a server)`);
+        authorize: (kind, file, commit, allowed) => {
+          if (requireSigned) {
+            if (!allowed.has(signedBy) || !writers.has(signedBy)) throw new Rejection(`'${signedBy}' may not ${kind} protected file '${file}' (${commit.slice(0, 8)}, attributed by its commit signature)`);
+          } else if (kind === 'delete') notes.push(`'${file}' deleted in ${commit.slice(0, 8)} (who did it can't be checked without a server; see --require-signed)`);
         },
         note: (msg) => notes.push(msg.replace(/^\[eyesonly\] note: /, '')),
       }));
     }
     return checkers.get(oid);
   };
+  const tmp = requireSigned ? fs.mkdtempSync(path.join(os.tmpdir(), 'eyesonly-signers-')) : null;
+  const signers = new Map(); // policy blob oid -> { file, count }
 
   const commits = (g(['rev-list', '--reverse', '--topo-order', headC, ...(baseC || exclude.length ? ['--not', ...(baseC ? [baseC] : []), ...exclude] : [])]) || '').split('\n').filter(Boolean);
   let anyPolicy = accepted.size > 0;
@@ -133,6 +168,16 @@ export function verifyRange({ base = null, head = 'HEAD', exclude = [], cwd = pr
         continue;
       }
     }
+    if (requireSigned) {
+      if (!signers.has(oid)) signers.set(oid, allowedSigners(accepted.get(oid), tmp));
+      const s = signers.get(oid);
+      const r = s.count ? commitSigner(c, s.file, cwd) : { error: 'no member has an SSH signing key in the policy (eyesonly grant <name> --ssh-signing-key <key>)' };
+      if (r.error) {
+        fail(`commit ${c.slice(0, 8)} isn't signed by a member: ${r.error}`);
+        continue;
+      }
+      signedBy = r.who;
+    }
     try {
       checkerFor(oid).checkCommit(c);
     } catch (e) {
@@ -140,6 +185,7 @@ export function verifyRange({ base = null, head = 'HEAD', exclude = [], cwd = pr
       fail(e.message);
     }
   }
+  if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 
   // The resulting tree must be valid as a whole, whatever its history.
   const headOid = policyOid(headC, cwd);
@@ -154,7 +200,7 @@ export function verifyRange({ base = null, head = 'HEAD', exclude = [], cwd = pr
   return { errors, notes, checked: commits.length, policy: anyPolicy, head: headC, base: baseC };
 }
 
-function report(r, { what }) {
+function report(r, { what, requireSigned = false }) {
   for (const n of [...new Set(r.notes)]) log(`note: ${n}`);
   for (const e of r.errors) console.error(`[eyesonly] REJECTED: ${e}`);
   if (!r.policy) {
@@ -162,7 +208,7 @@ function report(r, { what }) {
     return true;
   }
   if (r.errors.length) return false;
-  log(`verified ${r.checked} commit(s) in ${what}: protected files are valid envelopes from allowed writers${r.checked ? '' : ' (no new commits)'}`);
+  log(`verified ${r.checked} commit(s) in ${what}: protected files are valid envelopes from allowed writers${requireSigned ? ', every commit signed by a member' : ''}${r.checked ? '' : ' (no new commits)'}`);
   return true;
 }
 
@@ -195,9 +241,11 @@ export async function cmdVerify(args) {
   let head = 'HEAD';
   let ref = null;
   let sealed = null;
+  let requireSigned = false;
   const rest = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--ref') ref = args[++i] || null;
+    if (args[i] === '--require-signed') requireSigned = true;
+    else if (args[i] === '--ref') ref = args[++i] || null;
     else if (args[i] === '--sealed') sealed = args[i + 1] && !args[i + 1].startsWith('-') ? args[++i] : '';
     else if (args[i] === '--range') {
       const r = args[++i] || '';
@@ -217,8 +265,8 @@ export async function cmdVerify(args) {
     if (base && commitOf(base) === commitOf(head)) base = null;
   }
   const what = base ? `${base.replace(/^refs\/(remotes\/|heads\/)/, '')}..${head}` : `the history of ${head}`;
-  const r = run(() => verifyRange({ base, head }));
-  let ok = report(r, { what });
+  const r = run(() => verifyRange({ base, head, requireSigned }));
+  let ok = report(r, { what, requireSigned });
   if (ref) {
     const full = ref.startsWith('refs/') ? ref : `refs/heads/${ref}`;
     const err = privateRefError(full, base || rp.defaultRef(process.cwd()));

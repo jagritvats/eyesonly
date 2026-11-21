@@ -393,8 +393,54 @@ rekeys. Or copy your old `identity.json` to this machine.
 **Cause:** the remote changed kind (for example the repo moved onto a server), or the
 default branch gained a policy file in a server-mode clone.
 **Fix:** if that's intended, `eyesonly setup --mode server` (or `--mode repo`). Moving to a
-server also needs `rm .git/eyesonly/trust.json` first; see
+server keeps the pinned admins (no need to delete trust.json); see
 [choosing a mode](choosing-a-mode.md#move-from-github-mode-to-the-server).
+
+### `'carol' can read but not write '.env' (read-only; writers: alice, bob). Restore it with: git checkout -- .env`
+
+**Cause:** carol is in the file's audience but not a writer (`writers` in the policy, or
+`eyesonly grant carol --read-only`). Her unchanged checkout is fine; an edit isn't.
+**Fix:** `git checkout -- .env`, or ask an admin for `eyesonly grant carol --writer`.
+
+### `` 'carol' may not write '.env' (read-only); pick a side with `git checkout --ours/--theirs -- .env` ``
+
+The merge driver won't re-seal a merge for a read-only member. Pick a side, or let a writer
+do the merge.
+
+### `signer 'carol' is not an allowed writer of '.env'` / `'.env' in <sha> has an invalid signature or its signer 'carol' may not write it`
+
+**Cause:** an envelope signed by someone who may read but not write the file (or not at all).
+Readers keep it encrypted; `verify` and the server reject it.
+**Fix:** a writer re-seals it (`eyesonly rekey`) or reverts the commit.
+
+### `commit <sha> isn't signed by a member: <why>` (`eyesonly verify --require-signed`)
+
+| Why | Fix |
+|---|---|
+| `not signed` | sign commits: `git config gpg.format ssh && git config user.signingkey ~/.ssh/id_ed25519.pub && git config commit.gpgsign true` |
+| `signed with a key that is not in the policy` | an admin runs `eyesonly grant <name> --ssh-signing-key <key>`; merges made in GitHub's web UI are signed by GitHub, so merge locally or squash |
+| `couldn't check the signature (is ssh-keygen installed?)` | install OpenSSH's `ssh-keygen` (it ships with Git for Windows) |
+| `no member has an SSH signing key in the policy` | register keys first, or drop `--require-signed` |
+
+### `'carol' may not delete protected file '.env' (<sha>, attributed by its commit signature)`
+
+With `--require-signed`, edits and deletions of protected files count as the commit signer's.
+Only writers of that file may make them.
+
+### `migrate moves a GitHub-mode repo onto a server, but this clone is in server mode`
+
+`eyesonly migrate` runs in a GitHub-mode clone. Teammates don't migrate; they run
+`eyesonly setup --remote eyesonly --mode server`.
+
+### `can't import policy.json: '<name>' with that card is not an admin of this policy`
+
+`eyesonly-server import --admin-card` checks the policy is signed by that admin. Use the
+right card, or drop the flag.
+
+### `user 'bob' already exists on this server with a different key`
+
+`eyesonly-server import` never changes a key. Run `eyesonly-server user set-key <bob's card>`
+if the policy's key is the right one, then import again.
 
 ### `refusing the repo's policy: <reason>. Nothing was changed.`
 
@@ -448,7 +494,9 @@ Client errors appear as
 | `repo was signed; server now serves an unsigned policy` | the attestation was removed on the server, or the server is lying | the admin re-signs; don't override without checking |
 | `policy signature invalid` | tampered or corrupt attestation | the admin re-signs |
 | `attestation is for repo X, not Y` | the server serves another repo's signature | report it to the admin |
-| `not signed by a pinned admin` | another admin signed | confirm out of band, then re-pin ([team-workflows.md](team-workflows.md#change-the-signing-admin-or-re-pin)) |
+| `not signed by a pinned admin ('dave' isn't one)` | an admin this clone never pinned signed (pins come from the admins a signed policy lists) | have a pinned admin sign; re-pin only after checking out of band ([team-workflows.md](team-workflows.md#change-the-signing-admin-or-re-pin)) |
+| `the server's policy isn't signed yet, and this clone pinned admins in GitHub mode` | after `eyesonly-server import`, nobody signed the server policy | an admin runs `policy manifest` / `policy-sign` / `policy attest` ([choosing a mode](choosing-a-mode.md#move-from-github-mode-to-the-server)) |
+| `policy is signed by 'dave', who is not an admin in it` | the signer isn't in the manifest's `admins` | report it to the admin |
 | `admin key does not match pinned fingerprint` | the admin's key changed, or `EYESONLY_PIN_ADMIN` is wrong | check the fingerprint ([policy-reference.md](policy-reference.md#pinning)) |
 | `policy version N is older than last seen M` | rollback | the admin signs a new version |
 | `policy version N was re-signed with different content` | the same version was signed twice | the admin signs a new version |

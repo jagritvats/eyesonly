@@ -29,5 +29,7 @@ args=(--range "$range")
 [[ -n "${EO_REF:-}" ]] && args+=(--ref "$EO_REF")
 # Sealed private branches: each ref under refs/eyesonly/b/ must be one encrypted envelope.
 [[ "${EO_SEALED:-true}" == true ]] && git remote get-url origin >/dev/null 2>&1 && args+=(--sealed origin)
+# Every commit SSH-signed by a member, changes attributed to the signer.
+[[ "${EO_REQUIRE_SIGNED:-false}" == true ]] && args+=(--require-signed)
 echo "eyesonly verify ${args[*]}"
 eyesonly verify "${args[@]}"

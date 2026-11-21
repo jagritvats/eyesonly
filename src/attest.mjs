@@ -5,7 +5,8 @@
 // server (A5) could swap a teammate's key or add a recipient. An admin therefore signs
 // a manifest of the file rules and keys with their Ed25519 identity key:
 //
-//   manifest:    { v: 1, repo, version, files: [[glob, [users]], ...], keys: { user: card } }
+//   manifest:    { v: 1, repo, version, files: [[glob, [users]], ...], keys: { user: card },
+//                  admins: { admin: ed25519 } }       // every admin, so clients pin them all
 //   attestation: { manifest, signer, signer_ed25519, sig = Ed25519("eyesonly-policy-v1\0" + canonical(manifest)) }
 //
 // `files` is an ordered array because file rules are first-match-wins and canonical
@@ -41,11 +42,12 @@ export function buildManifest({ repo, policy, users, version }) {
     files.push([glob, audience]);
     for (const u of audience) keys[u] = { x25519: users[u].x25519, ed25519: users[u].ed25519 };
   }
-  return { v: 1, repo, version, files, keys };
+  const admins = Object.fromEntries([...expand(policy, policy.admins || [], all)].sort().map((a) => [a, users[a].ed25519]));
+  return { v: 1, repo, version, files, keys, admins };
 }
 
 /** The parts of a manifest that must match the server's current policy. */
-export const manifestContent = (m) => canonical({ repo: m.repo, files: m.files, keys: m.keys });
+export const manifestContent = (m) => canonical({ repo: m.repo, files: m.files, keys: m.keys, admins: m.admins ?? null });
 
 export const manifestBytes = (m) => Buffer.from(DOMAIN + canonical(m));
 export const manifestHash = (m) => sha256hex(canonical(m));
@@ -77,9 +79,13 @@ export function validManifest(m) {
     m && m.v === 1 && typeof m.repo === 'string' && Number.isInteger(m.version) && m.version >= 1 &&
     Array.isArray(m.files) && m.files.every((f) => Array.isArray(f) && f.length === 2 && typeof f[0] === 'string' && names(f[1])) &&
     m.keys && typeof m.keys === 'object' && !Array.isArray(m.keys) &&
-    Object.values(m.keys).every((k) => k && typeof k.x25519 === 'string' && typeof k.ed25519 === 'string')
+    Object.values(m.keys).every((k) => k && typeof k.x25519 === 'string' && typeof k.ed25519 === 'string') &&
+    (m.admins === undefined || (m.admins && typeof m.admins === 'object' && !Array.isArray(m.admins) && Object.values(m.admins).every((k) => typeof k === 'string')))
   );
 }
+
+/** name -> pin fingerprint for every admin a server manifest lists (older manifests: none). */
+const listedAdmins = (m) => Object.fromEntries(Object.entries(m.admins || {}).map(([a, k]) => [a, adminFingerprint(k)]));
 
 /** The .git/eyesonly/policy.json shape the filters already understand. Insertion order keeps first-match order. */
 export function manifestToPolicy(m, user) {
@@ -94,7 +100,11 @@ export function manifestToPolicy(m, user) {
 export function resolvePolicy(raw, { trust, repoName, pin }) {
   const notes = [];
   const att = raw.attestation;
+  const migrating = trust?.mode === 'repo'; // this clone pinned admins from a policy in the repo
   if (!att) {
+    if (migrating) {
+      throw new Error("the server's policy isn't signed yet, and this clone pinned admins in GitHub mode. An admin signs it: eyesonly-server policy manifest <repo> > m.json, eyesonly policy-sign m.json > s.json, eyesonly-server policy attest <repo> s.json");
+    }
     if (trust?.signed) throw new Error('repo was signed; server now serves an unsigned policy');
     notes.push('warning: policy is not signed by an admin');
     const { repo, user, files, keys } = raw;
@@ -105,25 +115,30 @@ export function resolvePolicy(raw, { trust, repoName, pin }) {
   if (!validManifest(m)) throw new Error('policy signature invalid (malformed manifest)');
   if (m.repo !== repoName) throw new Error(`attestation is for repo ${m.repo}, not ${repoName}`);
   const fp = adminFingerprint(att.signer_ed25519);
-  if (pin && pin !== fp) throw new Error('admin key does not match pinned fingerprint');
+  if (m.admins && m.admins[att.signer] !== att.signer_ed25519) throw new Error(`policy is signed by '${att.signer}', who is not an admin in it`);
   const hash = manifestHash(m);
+  const listed = listedAdmins(m);
   let admins;
   if (trust) {
-    if (!Object.hasOwn(trust.admins || {}, att.signer)) throw new Error('not signed by a pinned admin');
+    if (!Object.hasOwn(trust.admins || {}, att.signer)) throw new Error(`not signed by a pinned admin ('${att.signer}' isn't one)`);
     if (trust.admins[att.signer] !== fp) throw new Error('admin key does not match pinned fingerprint');
     if (m.version < trust.version) throw new Error(`policy version ${m.version} is older than last seen ${trust.version}`);
-    if (m.version === trust.version && hash !== trust.manifestHash) {
+    // Moving from GitHub mode, the server's manifest is a new document: only the version floor applies.
+    if (!migrating && m.version === trust.version && hash !== trust.manifestHash) {
       throw new Error(`policy version ${m.version} was re-signed with different content`);
     }
-    admins = trust.admins;
+    // A policy signed by a pinned admin may change the admin set: pin the admins it lists.
+    admins = Object.keys(listed).length ? listed : trust.admins;
+    if (migrating) notes.push(`moved to the server: its policy v${m.version} is signed by ${att.signer} (${fp}), an admin this clone already pinned`);
   } else {
-    admins = { [att.signer]: fp };
-    notes.push(`pinned admin ${att.signer} ${fp}`);
+    if (pin && pin !== fp) throw new Error('admin key does not match pinned fingerprint'); // the pin names the signer
+    admins = Object.keys(listed).length ? listed : { [att.signer]: fp };
+    notes.push(`pinned admin${Object.keys(admins).length > 1 ? 's' : ''} ${Object.entries(admins).map(([a, f]) => `${a} ${f}`).join(', ')}`);
   }
   if (raw.attestation_stale) notes.push('warning: server policy changed since the last admin signature; using the signed policy');
   return {
     policy: manifestToPolicy(m, raw.user),
-    trust: { v: 1, repo: m.repo, signed: true, admins, version: m.version, manifestHash: hash },
+    trust: { v: 1, mode: 'server', repo: m.repo, signed: true, admins, version: m.version, manifestHash: hash, ...(migrating ? { migratedFrom: trust.repo } : {}) },
     notes,
   };
 }

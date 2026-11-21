@@ -105,6 +105,51 @@ function cmdPolicy([sub, name, file]) {
   die('usage: eyesonly-server policy show|set <name.git> [file|-] | manifest <name.git> | attest <name.git> <signed.json>');
 }
 
+const IMPORT_USAGE = 'usage: eyesonly-server import <name.git> --policy <.eyesonly/policy.json> [--admin-card <eyesonlypub1:...>]';
+
+/** GitHub mode -> server: create a repo from a verified .eyesonly/policy.json (store.importRepo). */
+async function cmdImport(args) {
+  const opt = (k) => (args.includes(k) ? args[args.indexOf(k) + 1] : undefined);
+  const name = args[0];
+  const file = opt('--policy');
+  if (!name || name.startsWith('--') || !file) die(IMPORT_USAGE);
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    die(`can't read ${file}: ${e.message}`);
+  }
+  let r;
+  try {
+    r = await store.importRepo(name, text, { adminCard: opt('--admin-card') ?? null, pin: process.env.EYESONLY_PIN_ADMIN || null });
+  } catch (e) {
+    if (e instanceof OpError) die(e.message);
+    throw e;
+  }
+  const { manifest: m, rules, tokens, existing } = r;
+  cliLog({ op: 'repo.import', repo: name, from: m.repo, version: m.version });
+  const e = (s) => console.error(s);
+  e(`imported ${name} from GitHub-mode policy v${m.version} (repo id ${m.repo})`);
+  e(`  admins  ${rules.admins.map((a) => `${a} ${attest.adminFingerprint(m.keys[a].ed25519)}`).join(', ')}`);
+  e(`  members ${Object.keys(m.keys).join(', ')}${existing.length ? ` (${existing.join(', ')} already registered)` : ''}`);
+  const prefixes = Object.keys(rules.branches || {});
+  if (prefixes.length) e(`  private ${prefixes.map((p) => p.replace(/^refs\/heads\//, '') + '*').join(', ')} (hidden by the server; sealed copies aren't needed here)`);
+  if (tokens.length) e('Tokens, shown once (name<TAB>token); give each person theirs:');
+  for (const [u, t] of tokens) console.log(`${u}\t${t}`);
+  e(`
+Next:
+  1. An admin signs the server's policy with the SAME key members already pinned:
+       eyesonly-server policy manifest ${name} > m.json        # on the server
+       eyesonly policy-sign m.json > s.json                     # on the admin's machine
+       eyesonly-server policy attest ${name} s.json             # on the server
+  2. The admin moves the repo (every branch and tag; sealed private branches they can read
+     become real private branches on the server):
+       eyesonly migrate --to https://<admin>:<token>@<host>/${name}
+  3. Everyone else, in their clone:
+       git remote add eyesonly https://<name>:<token>@<host>/${name}
+       git fetch eyesonly && eyesonly setup --remote eyesonly --mode server`);
+}
+
 const INIT_USAGE =
   'usage: eyesonly-server init --admin <eyesonlypub1:...> --repo <name.git> [--files .env,secrets/**] [--private-prefix refs/heads/private/] [--url https://git.example.com]';
 
@@ -474,6 +519,7 @@ function hookPreReceive() {
     gBuf,
     reject,
     isAdmin,
+    writers: new Set(all.filter((u) => refguard.canWrite(policy, u, all))),
     authorize: (kind, file, commit, allowed) => {
       if (!allowed.has(user)) reject(`'${user}' may not ${kind} protected file '${file}' (${commit.slice(0, 8)})`);
     },
@@ -567,6 +613,8 @@ const USAGE = `eyesonly-server: auth proxy + policy enforcement for eyesonly rep
   eyesonly-server user list
   eyesonly-server repo create <name.git> --admin <user>
   eyesonly-server repo list
+  eyesonly-server import <name.git> --policy <.eyesonly/policy.json> [--admin-card <card>]
+                                                   create a repo from a GitHub-mode policy (members, keys, rules)
   eyesonly-server policy show <name.git>
   eyesonly-server policy set <name.git> <file|->   replace the policy (validated)
   eyesonly-server policy manifest <name.git>       print the policy manifest for an admin to sign
@@ -585,6 +633,7 @@ export async function main([cmd, ...rest]) {
   if (cmd === 'init') return cmdInit(rest);
   if (cmd === 'user') return cmdUser(rest);
   if (cmd === 'repo') return cmdRepo(rest);
+  if (cmd === 'import') return cmdImport(rest);
   if (cmd === 'policy') return cmdPolicy(rest);
   if (cmd === 'serve') return cmdServe(rest);
   if (cmd === 'mirror') return (await import('./mirror.mjs')).cmdMirror(rest);

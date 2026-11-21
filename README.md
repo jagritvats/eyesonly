@@ -75,6 +75,17 @@ eyesonly clone http://alice:<token>@git.example.com/app.git   # or: git clone + 
 cd app && echo "STRIPE_SECRET=..." > .env && git add .env && git commit -m env && git push
 ```
 
+### Already have a repo or a clone?
+
+| Situation | Commands |
+|---|---|
+| Move your GitHub repo onto Eyes Only | `git remote rename origin github && git remote add origin https://you:<token>@host/app.git && git push -u origin --all && eyesonly setup` |
+| Teammate with an existing clone | `git remote set-url origin https://you:<token>@host/app.git && git pull && eyesonly setup` (pull first) |
+| Commit the `.env` you've been gitignoring | remove it from `.gitignore`, then `git add .env && git commit && git push` |
+
+Full walkthrough, including history that already contains a secret:
+[docs/existing-repos.md](docs/existing-repos.md).
+
 Day to day it's just git. `git diff` and `git log -p` show plaintext to people who can
 read a file, and `[eyesonly: encrypted, readable by …]` to everyone else. `git mv` of a secret
 just works: the pre-commit hook installed by `eyesonly setup` re-seals it for its new path.
@@ -85,6 +96,17 @@ just works: the pre-commit hook installed by `eyesonly setup` re-seals it for it
 | `eyesonly pull-policy && eyesonly rekey` | After the admin changes access: re-encrypt for the new audience |
 | `eyesonly audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
 | `eyesonly-server policy manifest app.git > m.json`, `eyesonly policy-sign m.json > s.json`, `eyesonly-server policy attest app.git s.json` | Admin signs the policy so a compromised server can't swap keys or add readers; clients pin the admin key on first contact (`EYESONLY_PIN_ADMIN=<fingerprint>` pins it up front) |
+
+## Guides
+
+Also at [jagritvats.github.io/eyesonly/docs](https://jagritvats.github.io/eyesonly/docs/).
+
+- [Existing repos and clones](docs/existing-repos.md): migrate a repo, onboard clones, start tracking `.env`
+- [Team workflows](docs/team-workflows.md): grant and revoke access, private branches, offboarding
+- [CI](docs/ci.md): read protected files in CI
+- [Server deployment](docs/server-deployment.md): TLS, systemd, Docker, backups
+- [Policy reference](docs/policy-reference.md): every policy field
+- [Troubleshooting](docs/troubleshooting.md): error messages and fixes
 
 ## Protected refs and read-only members
 

@@ -7,7 +7,7 @@
 
 ![Eyes Only: per-person access inside one git repo](https://raw.githubusercontent.com/jagritvats/eyesonly/main/assets/banner.png)
 
-> **Built to be checked.** 696 adversarial end-to-end tests (13 suites) run against real repos and a
+> **Built to be checked.** 1,072 adversarial end-to-end tests (18 suites) run against real repos and a
 > real server, the [threat model](THREAT_MODEL.md) maps every attack to the test that stops it,
 > and the code is small, dependency-free and open. Found a hole? [Report it](SECURITY.md).
 

@@ -70,10 +70,10 @@ cd "$SB/junior"
 say junior 'echo DB_PASS=oops > .env && git add .env'
 (echo 'DB_PASS=oops' > .env && as junior git add .env 2>&1 | grep '^\[eyesonly\]' | sed "s/^/$R/;s/\$/$N/") || true
 as junior git checkout -q -- .env 2>/dev/null || true
-say junior 'git -c filter.eyesonly.clean=cat commit -am leak && git push   (client filter disabled)'
+say junior 'git -c filter.eyesonly.process= -c filter.eyesonly.clean=cat commit -am leak && git push   (client filter disabled)'
 echo 'DB_PASS=oops' > .env
-as junior git -c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat add .env
-as junior git -c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat commit -qm leak --no-verify
+as junior git -c filter.eyesonly.process= -c filter.eyesonly.required=false -c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat add .env
+as junior git -c filter.eyesonly.process= -c filter.eyesonly.required=false -c filter.eyesonly.clean=cat -c filter.eyesonly.smudge=cat commit -qm leak --no-verify
 as junior git push -q 2>&1 | grep 'REJECTED' | sed "s/^remote: *//;s/ *$//;s/^/$R/;s/\$/$N/" || true
 
 step "alice merges the private branch into main by mistake"

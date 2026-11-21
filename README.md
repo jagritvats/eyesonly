@@ -44,6 +44,7 @@ a real server, with an attacker who controls their own git client.
 
 ```bash
 npm i -g eyesonly      # CLIs: eyesonly (also `git eyesonly`) and eyesonly-server
+brew install jagritvats/tap/eyesonly   # macOS / Linux, same CLIs
 ```
 
 Server in Docker: `docker build -t eyesonly . && docker run -p 8787:8787 -v eyesonly-data:/data eyesonly`.

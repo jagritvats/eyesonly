@@ -44,6 +44,11 @@ convenient; the server enforces.
 | 17 | Malicious env injection into `git http-backend` | Env is built from scratch (allow-list), `GIT_CONFIG_NOSYSTEM=1` | by design |
 | 18 | A1's client is tricked into decrypting/using a forged secret | Smudge checks the Ed25519 signature and that the signer is an allowed writer before writing plaintext | by design |
 | 19 | A1 probes whether the server holds a private commit via `have <sha>` ACKs (object-existence oracle) | Proxy parses the upload-pack body and drops have/shallow lines for objects not reachable from refs visible to the user; the response is byte-identical to a nonexistent sha | ✅ (test/oracle.sh) |
+| 20 | A5 swaps a teammate's public key so new secrets are encrypted to the server | An admin signs a manifest of file rules + keys (`veil policy-sign`); clients verify it and use only the manifest's keys. A tampered manifest fails with `policy signature invalid` and the cached policy is left untouched | ✅ (test/attest.sh) |
+| 21 | A5 makes itself (or mallory) an admin and re-signs the policy | Clients pin the admin key on first contact (`.git/veil/trust.json`, or out of band with `VEIL_PIN_ADMIN`) and refuse other signers: `not signed by a pinned admin` | ✅ (test/attest.sh) |
+| 22 | A5 rolls back to an older, validly signed policy (e.g. one that still includes a revoked user) | Manifests carry a version; clients refuse anything older than the last version they saw, and a same-version manifest with different content | ✅ (test/attest.sh) |
+| 23 | A5 downgrades to an unsigned policy | Once a repo was signed, the client refuses an unsigned policy: `repo was signed; server now serves an unsigned policy` | ✅ (test/attest.sh) |
+| 24 | A5 injects a recipient (or a signing key) into the unsigned part of the policy view | Clients encrypt only to, and accept envelope signatures only from, keys in the signed manifest; the server flags `attestation_stale` and the client warns | ✅ (test/attest.sh) |
 
 ## Known limitations
 
@@ -57,9 +62,11 @@ These are stated plainly, because over-claiming is how security products lose tr
    approach (Piper/CitC-style), not git's Merkle DAG.
 3. **Object-existence oracle.** Closed in v0.2 (attack #19). Remaining: the proxy still sees full bodies; unreachable-object checks rely on hideRefs prefixes.
 4. **Compromised server (A5).** The server can't read protected *files* (it never holds
-   private keys), but it can see private *branches* (they're plaintext git objects), and
-   it can lie about public keys in the policy endpoint. Mitigation (roadmap): pin
-   teammate fingerprints client-side (TOFU) and sign the policy with an admin key.
+   private keys) and, once an admin signs the policy, it can't lie about public keys or
+   audiences (#20-24). It still sees private *branches* (they're plaintext git objects).
+   Admin trust is TOFU: the first contact is trusted unless `VEIL_PIN_ADMIN` is set,
+   unsigned repos are only warned about, and adding or rotating an admin needs a
+   re-pin (re-clone, or delete `.git/veil/trust.json`).
 5. **Pre-receive cost.** The hook runs `ls-tree -r` per new commit; large monorepos
    need path-filtered diffs (roadmap 0.2).
 6. **Protocol v0 only.** That's a deliberate trade-off (see #8) and costs some fetch

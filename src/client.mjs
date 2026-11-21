@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import * as attest from './attest.mjs';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
 import { fileRule } from './policy.mjs';
@@ -116,6 +117,29 @@ function writePolicy(policy, dir) {
   fs.writeFileSync(p, JSON.stringify(policy, null, 2));
 }
 
+/** Fetch the policy and check it against the pinned admin key. Writes nothing. */
+async function loadResolved(remoteUrl, gitDirOrNull) {
+  const raw = await fetchPolicy(remoteUrl);
+  const repoName = path.basename(new URL(remoteUrl).pathname);
+  let r;
+  try {
+    r = attest.resolvePolicy(raw, {
+      trust: gitDirOrNull ? attest.loadTrust(gitDirOrNull) : null,
+      repoName,
+      pin: process.env.VEIL_PIN_ADMIN,
+    });
+  } catch (e) {
+    die(`refusing the server's policy: ${e.message}. Nothing was changed; ask your admin (if the admin set really changed, delete .git/veil/trust.json to re-pin).`);
+  }
+  r.notes.forEach((n) => log(n));
+  return r;
+}
+
+function saveResolved({ policy, trust }, dir) {
+  writePolicy(policy, dir);
+  if (trust) attest.saveTrust(dir || gitDir(), trust);
+}
+
 function configureFilters(cwd) {
   const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
   const base = `${q(process.execPath)} ${q(CLI)}`;
@@ -151,10 +175,11 @@ function protectedFiles(policy, cwd) {
 async function cmdSetup() {
   const top = gitStr(['rev-parse', '--show-toplevel']);
   const remote = gitStr(['config', 'remote.origin.url'], { cwd: top });
-  const policy = await fetchPolicy(remote);
+  const resolved = await loadResolved(remote, gitDir());
+  const { policy } = resolved;
   const id = loadIdentity({ required: false });
   if (id && policy.user !== id.name) log(`warning: server says you are '${policy.user}' but your identity is '${id.name}'`);
-  writePolicy(policy);
+  saveResolved(resolved);
   configureFilters(top);
   ensureAttributes(policy, top);
   const files = protectedFiles(policy, top);
@@ -164,16 +189,17 @@ async function cmdSetup() {
 
 async function cmdPullPolicy() {
   const remote = gitStr(['config', 'remote.origin.url']);
-  writePolicy(await fetchPolicy(remote));
+  saveResolved(await loadResolved(remote, gitDir()));
   log('policy updated. Run `veil rekey` if file access changed.');
 }
 
 async function cmdClone([url, dir]) {
   if (!url) die('usage: veil clone <url> [dir]');
-  const policy = await fetchPolicy(url);
+  const resolved = await loadResolved(url, null); // before cloning: a bad policy leaves nothing behind
+  const { policy } = resolved;
   dir = path.resolve(dir || path.basename(new URL(url).pathname).replace(/\.git$/, ''));
   execFileSync('git', ['clone', '--quiet', '--no-checkout', url, dir], { stdio: 'inherit' });
-  writePolicy(policy, path.join(dir, '.git'));
+  saveResolved(resolved, path.join(dir, '.git'));
   configureFilters(dir);
   execFileSync('git', ['reset', '--quiet', '--hard', 'HEAD'], { cwd: dir, stdio: ['ignore', 'ignore', 'inherit'] });
   const files = protectedFiles(policy, dir);
@@ -333,6 +359,7 @@ const USAGE = `veil: per-user access control for git
   veil clone <url> [dir]   clone a veil repo and decrypt what you're allowed to read
   veil setup               enable veil in an existing clone
   veil pull-policy         refresh the cached access policy from the server
+  veil policy-sign <file>  (admin) sign a policy manifest from veil-server policy manifest
   veil status              list protected files and whether you can read them
   veil rekey               re-encrypt your readable files for the current policy
   veil audit <user>        list secrets <user> could ever read (rotate them after offboarding)
@@ -347,6 +374,7 @@ export async function main(argv) {
     clone: cmdClone,
     setup: cmdSetup,
     'pull-policy': cmdPullPolicy,
+    'policy-sign': (a) => attest.cmdPolicySign(a),
     status: cmdStatus,
     rekey: cmdRekey,
     audit: cmdAudit,

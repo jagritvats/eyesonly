@@ -45,6 +45,7 @@ read a file, and `[veil: encrypted, readable by …]` to everyone else.
 | `veil status` | Protected files, who can read them, and whether they need a rekey |
 | `veil pull-policy && veil rekey` | After the admin changes access: re-encrypt for the new audience |
 | `veil audit <user>` | Offboarding: every protected file the user could ever decrypt (rotate these) |
+| `veil-server policy manifest app.git > m.json`, `veil policy-sign m.json > s.json`, `veil-server policy attest app.git s.json` | Admin signs the policy so a compromised server can't swap keys or add readers; clients pin the admin key on first contact (`VEIL_PIN_ADMIN=<fingerprint>` pins it up front) |
 
 ## How it works
 

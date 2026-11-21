@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import * as attest from './attest.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as vc from './crypto.mjs';
@@ -126,7 +127,45 @@ function cmdPolicy([sub, name, file]) {
     fs.renameSync(policyFile(dir) + '.tmp', policyFile(dir));
     return console.error('policy updated. Members should run `veil pull-policy && veil rekey`.');
   }
-  die('usage: veil-server policy show|set <name.git> [file|-]');
+  if (sub === 'manifest') {
+    const installed = loadAttestation(dir);
+    const version = (installed?.manifest.version || 0) + 1;
+    return console.log(attest.canonical(attest.buildManifest({ repo: name, policy: loadPolicy(dir), users: loadUsers(), version })));
+  }
+  if (sub === 'attest') {
+    let att;
+    try {
+      att = JSON.parse(fs.readFileSync(file === '-' || !file ? 0 : file, 'utf8'));
+    } catch (e) {
+      die(`can't read signed manifest: ${e.message}`);
+    }
+    const policy = loadPolicy(dir);
+    const users = loadUsers();
+    if (!att?.manifest || typeof att.signer !== 'string') die('not a signed manifest (expected the output of `veil policy-sign`)');
+    if (!expand(policy, policy.admins || [], Object.keys(users)).has(att.signer)) die(`'${att.signer}' is not an admin of ${name}`);
+    const u = Object.hasOwn(users, att.signer) ? users[att.signer] : null;
+    if (!u || att.signer_ed25519 !== u.ed25519 || !attest.verifyAttestation(att)) {
+      die(`bad signature: not a valid signature by ${att.signer}'s registered key`);
+    }
+    const installed = loadAttestation(dir);
+    const current = attest.buildManifest({ repo: name, policy, users, version: 0 });
+    if (attest.manifestContent(att.manifest) !== attest.manifestContent(current)) {
+      die(`signed manifest does not match current policy. Re-run: veil-server policy manifest ${name}`);
+    }
+    const v = att.manifest.version;
+    if (att.manifest.v !== 1 || !Number.isInteger(v) || v < 1 || (installed && v <= installed.manifest.version)) {
+      die(`version must increase (installed: ${installed?.manifest.version ?? 'none'}, signed: ${v}). Re-run: veil-server policy manifest ${name}`);
+    }
+    fs.writeFileSync(attestationFile(dir) + '.tmp', JSON.stringify(att, null, 2));
+    fs.renameSync(attestationFile(dir) + '.tmp', attestationFile(dir));
+    return console.error(`installed policy v${v} signed by ${att.signer}. Members pick it up with \`veil pull-policy\`.`);
+  }
+  die('usage: veil-server policy show|set <name.git> [file|-] | manifest <name.git> | attest <name.git> <signed.json>');
+}
+
+const attestationFile = (dir) => path.join(dir, 'veil-attestation.json');
+function loadAttestation(dir) {
+  return fs.existsSync(attestationFile(dir)) ? JSON.parse(fs.readFileSync(attestationFile(dir), 'utf8')) : null;
 }
 
 // ------------------------------------------------------------- HTTP proxy
@@ -191,7 +230,13 @@ function handle(req, res, opts) {
   if (!expand(policy, policy.members, all).has(user)) return send(res, 404, 'not found\n');
 
   if (req.method === 'GET' && rest === '/veil/policy') {
-    return send(res, 200, JSON.stringify(clientPolicy(repo, policy, users, user)), { 'content-type': 'application/json' });
+    const view = clientPolicy(repo, policy, users, user);
+    const attestation = loadAttestation(dir);
+    if (attestation) {
+      const current = attest.buildManifest({ repo, policy, users, version: 0 });
+      Object.assign(view, { attestation, attestation_stale: attest.manifestContent(current) !== attest.manifestContent(attestation.manifest || {}) });
+    }
+    return send(res, 200, JSON.stringify(view), { 'content-type': 'application/json' });
   }
 
   // Only the smart protocol is served. Dumb HTTP (GET /objects/..., /HEAD, ...) would
@@ -454,6 +499,8 @@ const USAGE = `veil-server: auth proxy + policy enforcement for veil repos   (da
   veil-server repo list
   veil-server policy show <name.git>
   veil-server policy set <name.git> <file|->   replace the policy (validated)
+  veil-server policy manifest <name.git>       print the policy manifest for an admin to sign
+  veil-server policy attest <name.git> <signed.json>   install an admin-signed manifest
   veil-server serve [--port 8787] [--host 127.0.0.1]`;
 
 export async function main([cmd, ...rest]) {

@@ -9,6 +9,7 @@ import { fileRule, writersOf } from './policy.mjs';
 import { installPreCommitHook, cmdPreCommit, HOOK_MARK } from './hooks.mjs';
 import * as ident from './identity.mjs';
 import { eyesonlyHome, identityPath, identitySource, readIdentity } from './identity.mjs';
+import { fetchRetry } from './net.mjs';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'eyesonly.mjs');
 const EYESONLY_HOME = eyesonlyHome;
@@ -228,7 +229,7 @@ async function fetchPolicy(remoteUrl, remoteName) {
   u.pathname = u.pathname.replace(/\/+$/, '') + '/eyesonly/policy';
   let res;
   try {
-    res = await fetch(u, { headers: { authorization: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64') } });
+    res = await fetchRetry(u, { headers: { authorization: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64') } });
   } catch (e) {
     die(`can't reach ${u.host}: ${e.cause?.code || e.cause?.message || e.message}`);
   }

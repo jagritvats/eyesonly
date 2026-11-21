@@ -10,6 +10,7 @@ import * as vc from './crypto.mjs';
 import * as rp from './repo-policy.mjs';
 import { installPrePushHook, PRE_PUSH_MARK } from './hooks.mjs';
 import { configureFilters, ensureAttributes, gitDir, loadIdentity, protectedFiles, repoTop, resmudge, saveResolved } from './client.mjs';
+import { fetchRetry } from './net.mjs';
 
 const log = (...a) => console.error('[eyesonly]', ...a);
 function die(msg) {
@@ -45,7 +46,7 @@ export async function probeServer(url) {
   u.password = '';
   u.pathname = u.pathname.replace(/\/+$/, '') + '/eyesonly/policy';
   try {
-    const res = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
+    const res = await fetchRetry(u, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
     return res.status === 401 && /realm="eyesonly"/i.test(res.headers.get('www-authenticate') || '');
   } catch {
     return false;

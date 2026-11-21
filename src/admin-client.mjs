@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import * as attest from './attest.mjs';
 import { readIdentity, identityPath } from './identity.mjs';
+import { fetchRetry } from './net.mjs';
 
 const USAGE = `usage: eyesonly admin [--server URL] [--token-file F] [--insecure] <command>
   (or set EYESONLY_ADMIN_SERVER and EYESONLY_ADMIN_TOKEN)
@@ -87,7 +88,8 @@ async function call(conn, method, route, body) {
   const url = `${conn.base}/_eyesonly/admin/v1${route}`;
   let res;
   try {
-    res = await fetch(url, {
+    // Only GETs are retried: a repeated POST/PUT/DELETE could apply twice.
+    res = await (method === 'GET' ? fetchRetry : fetch)(url, {
       method,
       headers: { authorization: `Bearer ${conn.token}`, accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,

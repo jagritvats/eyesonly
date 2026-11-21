@@ -90,6 +90,24 @@ Every git host has branch protection; so does Veil. Both fields are optional:
   holds a different `trust.json`, veil stops and asks you to delete one.
 - **Sparse checkouts.** `veil setup` leaves paths excluded by `git sparse-checkout` alone.
 
+## Merging protected files
+
+Every seal produces fresh ciphertext, so without help any two concurrent edits to `.env`
+would conflict inside the envelope. `veil setup` and `veil clone` register a merge driver
+(`merge=veil` in `.gitattributes`; older `filter=veil diff=veil` lines are upgraded in
+place). On `git merge`, `git rebase` or `git pull` it:
+
+1. verifies all three sides (signed by an allowed writer, bound to this path) and refuses
+   forged or moved envelopes, so a merge can't launder them under your signature;
+2. decrypts them into private temp files (`.git/veil/tmp`, removed right after) and runs
+   `git merge-file`;
+3. clean merge: re-seals the result for the file's audience, signed by you. Conflict: the
+   working file holds plaintext with conflict markers; fix it and `git add` re-encrypts it.
+
+If you can't read the file you get `you are not a reader` plus the list of readers; pick a
+side with `git checkout --ours/--theirs -- <path>`. Binary protected files aren't merged
+(pick a side). A modify/delete conflict never reaches the driver; git reports it as usual.
+
 ## How it works
 
 1. **Client filter** (`clean`/`smudge`): protected paths are sealed with AES-256-GCM.
@@ -112,6 +130,7 @@ bin/veil.mjs, bin/veil-server.mjs   CLIs
 src/crypto.mjs                      envelope format
 src/policy.mjs                      glob / ref / group matching
 src/client.mjs                      filters + developer commands
+src/merge.mjs                       merge driver for protected files
 src/server.mjs                      admin CLI, HTTP proxy, pre-receive hook
 test/e2e.sh                         adversarial suite
 site/index.html                     landing page

@@ -34,7 +34,7 @@ function tryGit(args) {
 
 // ---------------------------------------------------------------- identity
 
-function loadIdentity({ required = true } = {}) {
+export function loadIdentity({ required = true } = {}) {
   const p = identityPath();
   if (!fs.existsSync(p)) {
     if (required) die(`no identity at ${p}. Run: veil keygen <your-name>`);
@@ -90,7 +90,7 @@ function migrateWorktreeState(own, common) {
 }
 const policyPath = (dir = gitDir()) => path.join(dir, 'veil', 'policy.json');
 
-function loadPolicy({ required = true } = {}) {
+export function loadPolicy({ required = true } = {}) {
   let p;
   try {
     p = policyPath();
@@ -172,23 +172,37 @@ function configureFilters(cwd) {
   set('filter.veil.required', 'true');
   set('diff.veil.textconv', `${base} textconv`);
   set('diff.veil.cachetextconv', 'false');
+  set('merge.veil.name', 'veil decrypt-merge-reseal');
+  set('merge.veil.driver', `${base} merge-file %O %A %B %P %L`);
   installPreCommitHook(cwd);
 }
 
 /** Policy globs are root-anchored; translate them to .gitattributes lines. */
 function attributeLines(policy) {
-  return Object.keys(policy.files || {}).map((g) => `${g.startsWith('**/') ? g : '/' + g} filter=veil diff=veil`);
+  return Object.keys(policy.files || {}).map((g) => `${g.startsWith('**/') ? g : '/' + g} filter=veil diff=veil merge=veil`);
 }
 
 function ensureAttributes(policy, cwd) {
   attrs.pinAttributes(attributeLines(policy), attrs.commonGitDir(cwd)); // wins over any in-tree .gitattributes
   const p = path.join(cwd, '.gitattributes');
   const existing = fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
-  const have = new Set(existing.split('\n').map((l) => l.trim()));
-  const missing = attributeLines(policy).filter((l) => !have.has(l));
-  if (!missing.length) return false;
-  fs.writeFileSync(p, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + missing.join('\n') + '\n');
-  log(`added ${missing.length} line(s) to .gitattributes. Commit it so teammates' clients encrypt these paths too.`);
+  // Lines written before the merge driver existed lack ` merge=veil`: upgrade them in place.
+  const old = (l) => l.replace(/ merge=veil$/, '');
+  const want = attributeLines(policy);
+  let upgraded = 0;
+  const lines = existing.split('\n').map((l) => {
+    const t = l.trim();
+    const hit = want.find((w) => w !== t && old(w) === t);
+    if (!hit) return l;
+    upgraded++;
+    return hit;
+  });
+  const have = new Set(lines.map((l) => l.trim()));
+  const missing = want.filter((l) => !have.has(l));
+  if (!missing.length && !upgraded) return false;
+  const text = lines.join('\n');
+  fs.writeFileSync(p, text + (text && !text.endsWith('\n') ? '\n' : '') + missing.join('\n') + (missing.length ? '\n' : ''));
+  log(`${missing.length ? `added ${missing.length}` : ''}${missing.length && upgraded ? ', ' : ''}${upgraded ? `upgraded ${upgraded}` : ''} line(s) in .gitattributes. Commit it so teammates' clients encrypt these paths too.`);
   return true;
 }
 
@@ -239,7 +253,7 @@ async function cmdClone([url, dir]) {
 
 // ----------------------------------------------------------------- filters
 
-function recipientsFor(policy, allowed) {
+export function recipientsFor(policy, allowed) {
   const out = {};
   for (const u of allowed) if (policy.keys?.[u]) out[u] = policy.keys[u].x25519;
   return out;
@@ -281,7 +295,7 @@ function cmdClean([file]) {
 }
 
 /** Decrypt a blob if we're allowed to and its signature checks out; else explain why not. */
-function tryOpen(blob, file, policy, id) {
+export function tryOpen(blob, file, policy, id) {
   let env;
   try {
     env = vc.parse(blob);
@@ -402,7 +416,7 @@ const USAGE = `veil: per-user access control for git
   veil rekey               re-encrypt your readable files for the current policy
   veil audit <user>        list secrets <user> could ever read (rotate them after offboarding)
 
-internal (wired up by setup): clean %f | smudge %f | textconv <file> | pre-commit`;
+internal (wired up by setup): clean %f | smudge %f | textconv <file> | pre-commit | merge-file`;
 
 export async function main(argv) {
   const [cmd, ...rest] = argv;
@@ -420,6 +434,7 @@ export async function main(argv) {
     smudge: cmdSmudge,
     textconv: cmdTextconv,
     'pre-commit': cmdPreCommit,
+    'merge-file': (a) => import('./merge.mjs').then((m) => m.cmdMergeFile(a)),
   };
   if (!table[cmd]) {
     console.error(USAGE);
